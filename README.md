@@ -125,9 +125,9 @@ A datastore will be implicitly created by the `scan` command if needed.
 #### Blobs
 Each input that Nosey Parker scans is called a _blob_, and has a unique blob ID, which is a SHA-1 digest computed the same way `git` does.
 
-#### Provenance
-Each blob has one or more _provenance_ entries associated with it.
-A provenance entry is metadata that describes how the input was discovered, such as a file on the filesystem or an entry in Git repository history.
+#### Target
+Each blob has one or more _target_ entries associated with it.
+A target entry is metadata that describes how the input was discovered, such as a file on the filesystem or an entry in Git repository history.
 
 #### Rules
 Nosey Parker is a rule-based system that uses regular expressions.

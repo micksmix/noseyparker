@@ -11,8 +11,8 @@ use noseyparker::bstring_escape::Escaped;
 use noseyparker::datastore::{Datastore, FindingDataEntry, FindingMetadata, Status};
 use noseyparker::defaults::get_builtin_rules;
 use noseyparker::match_type::{Group, Groups, Match};
-use noseyparker::provenance::Provenance;
-use noseyparker::provenance_set::ProvenanceSet;
+use noseyparker::target::Target;
+use noseyparker::target_set::TargetSet;
 
 use crate::args::{FindingStatus, GlobalArgs, ReportArgs, ReportOutputFormat};
 use crate::reportable::Reportable;
@@ -269,7 +269,7 @@ pub(crate) struct Finding {
 /// This corresponds to a single location.
 #[derive(Serialize, JsonSchema)]
 struct ReportMatch {
-    provenance: ProvenanceSet,
+    target: TargetSet,
 
     #[serde(rename = "blob_metadata")]
     blob_metadata: BlobMetadata,
@@ -291,7 +291,7 @@ struct ReportMatch {
 impl From<FindingDataEntry> for ReportMatch {
     fn from(e: FindingDataEntry) -> Self {
         ReportMatch {
-            provenance: e.provenance,
+            target: e.target,
             blob_metadata: e.blob_metadata,
             m: e.match_val,
             score: e.match_score,

@@ -177,8 +177,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
     Each match in the datastore is now associated with an array of capture groups.
     Previously, a rule whose pattern had multiple capture groups would produce one match object for each group, with each one being associated with a single capture group.
 
-  - Provenance metadata for blobs is recorded in a much simpler way than before.
-    The new representation explicitly records file and git-based provenance, but also adds explicit support for _extensible_ provenance.
+  - Target metadata for blobs is recorded in a much simpler way than before.
+    The new representation explicitly records file and git-based target, but also adds explicit support for _extensible_ target.
     This change will make it possible in the future to have Nosey Parker scan and usefully report blobs produced by custom input data enumerators (e.g., a Python script that lists files from the Common Crawl WARC files).
 
   - Scores are now associated with matches instead of findings.
@@ -192,7 +192,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
   - Each match now includes additional `rule_text_id`, `rule_structural_id`, and `structural_id` fields.
 
-  - The `provenance` field of each match is now slightly different.
+  - The `target` field of each match is now slightly different.
 
 - Schema migration of older Nosey Parker datastores is no longer performed.
   Previously, this would automatically and silently be done when opening a datastore from an older version.
@@ -385,7 +385,7 @@ docker pull ghcr.io/praetorian-inc/noseyparker:v0.14.0
 
 - The `scan` command now collects additional metadata about blobs found within Git repositories.
   Specifically, for each blob found in Git repository history, the set of commits where it was introduced and the accompanying pathname for the blob is collected ([#16](https://github.com/praetorian-inc/noseyparker/issues/16)).
-  This is enabled by default, but can be controlled using the new `--git-blob-provenance={first-seen,minimal}` parameter.
+  This is enabled by default, but can be controlled using the new `--git-blob-target={first-seen,minimal}` parameter.
 
   This newly-collected metadata is included in output of the `report` command.
 
@@ -395,7 +395,7 @@ docker pull ghcr.io/praetorian-inc/noseyparker:v0.14.0
   Datastores from earlier releases of Nosey Parker cannot be used with this release; instead, the inputs will have to be rescanned with a new datastore.
 
 - The JSON and JSONL output formats for the `report` command have changed slightly.
-  In particular, the `.matches[].provenance` field is now an array of objects instead of a single object, making it possible to handle situations where a blob is discovered multiple ways.
+  In particular, the `.matches[].target` field is now an array of objects instead of a single object, making it possible to handle situations where a blob is discovered multiple ways.
   The `provenenance` objects have some renamed fields, and contain significantly more metadata than before.
 
 

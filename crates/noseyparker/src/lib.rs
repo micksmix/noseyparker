@@ -13,8 +13,8 @@ pub mod location;
 pub mod match_type;
 pub mod matcher;
 pub mod matcher_stats;
-pub mod provenance;
-pub mod provenance_set;
+pub mod target;
+pub mod target_set;
 #[cfg(feature = "rule_profiling")]
 pub mod rule_profiling;
 pub mod rules_database;

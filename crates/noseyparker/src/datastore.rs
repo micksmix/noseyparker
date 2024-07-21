@@ -2,7 +2,9 @@ use anyhow::{bail, Context, Result};
 use bstr::BString;
 use indoc::indoc;
 use noseyparker_rules::Rule;
-use rusqlite::Connection;
+// use rusqlite::Connection;
+use polodb_core::bson::doc;
+use polodb_core::Database;
 use std::path::{Path, PathBuf};
 use tracing::{debug, debug_span, info, trace};
 
@@ -10,8 +12,8 @@ use crate::blob_metadata::BlobMetadata;
 use crate::git_url::GitUrl;
 use crate::location::{Location, OffsetSpan, SourcePoint, SourceSpan};
 use crate::match_type::Match;
-use crate::provenance::Provenance;
-use crate::provenance_set::ProvenanceSet;
+use crate::target::Target;
+use crate::target_set::TargetSet;
 use crate::snippet::Snippet;
 
 const CURRENT_SCHEMA_VERSION: u64 = 60;
@@ -52,16 +54,28 @@ pub struct Datastore {
     root_dir: PathBuf,
 
     /// A connection to the database backing this `Datastore`.
-    conn: Connection,
+    // conn: Connection,
+    db: Database,
 }
 
 // Public implementation
 impl Datastore {
     /// Create a new datastore at `root_dir` if one does not exist,
     /// or open an existing one if present.
+    // pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
+    //     debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
+
+    //     Self::create(root_dir, cache_size).or_else(|e| {
+    //         debug!(
+    //             "Failed to create datastore: {e:#}: will try to open existing datastore instead"
+    //         );
+    //         Self::open(root_dir, cache_size)
+    //     })
+    // }
+
     pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
         debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
-
+    
         Self::create(root_dir, cache_size).or_else(|e| {
             debug!(
                 "Failed to create datastore: {e:#}: will try to open existing datastore instead"
@@ -69,54 +83,82 @@ impl Datastore {
             Self::open(root_dir, cache_size)
         })
     }
+    
 
-    /// Open the existing datastore at `root_dir`.
-    pub fn open(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        debug!("Attempting to open existing datastore at {}", root_dir.display());
+    // /// Open the existing datastore at `root_dir`.
+    // pub fn open(root_dir: &Path, cache_size: i64) -> Result<Self> {
+    //     debug!("Attempting to open existing datastore at {}", root_dir.display());
 
-        let ds = Self::open_impl(root_dir, cache_size)?;
-        ds.check_schema_version()?;
+    //     let ds = Self::open_impl(root_dir, cache_size)?;
+    //     ds.check_schema_version()?;
 
-        let scratch_dir = ds.scratch_dir();
-        std::fs::create_dir_all(&scratch_dir).with_context(|| {
-            format!("Failed to create scratch directory {}", scratch_dir.display(),)
-        })?;
+    //     let scratch_dir = ds.scratch_dir();
+    //     std::fs::create_dir_all(&scratch_dir).with_context(|| {
+    //         format!("Failed to create scratch directory {}", scratch_dir.display(),)
+    //     })?;
 
-        let clones_dir = ds.clones_dir();
-        std::fs::create_dir_all(&clones_dir).with_context(|| {
-            format!("Failed to create clones directory {}", clones_dir.display(),)
-        })?;
+    //     let clones_dir = ds.clones_dir();
+    //     std::fs::create_dir_all(&clones_dir).with_context(|| {
+    //         format!("Failed to create clones directory {}", clones_dir.display(),)
+    //     })?;
 
-        let blobs_dir = ds.blobs_dir();
-        std::fs::create_dir_all(&blobs_dir).with_context(|| {
-            format!("Failed to create blobs directory {}", blobs_dir.display(),)
-        })?;
+    //     let blobs_dir = ds.blobs_dir();
+    //     std::fs::create_dir_all(&blobs_dir).with_context(|| {
+    //         format!("Failed to create blobs directory {}", blobs_dir.display(),)
+    //     })?;
 
-        Ok(ds)
-    }
+    //     Ok(ds)
+    // }
 
-    /// Create a new datastore at `root_dir` and open it.
-    pub fn create(root_dir: &Path, cache_size: i64) -> Result<Self> {
+    // /// Create a new datastore at `root_dir` and open it.
+    // pub fn create(root_dir: &Path, cache_size: i64) -> Result<Self> {
+    //     debug!("Attempting to create new datastore at {}", root_dir.display());
+
+    //     // Create datastore directory
+    //     std::fs::create_dir(root_dir).with_context(|| {
+    //         format!("Failed to create datastore root directory at {}", root_dir.display())
+    //     })?;
+
+    //     // Generate .gitignore file
+    //     std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
+    //         format!("Failed to write .gitignore to datastore at {}", root_dir.display())
+    //     })?;
+
+    //     let mut ds = Self::open_impl(root_dir, cache_size)?;
+
+    //     ds.migrate_0_60()
+    //         .context("Failed to initialize database schema")?;
+
+    //     Self::open(root_dir, cache_size)
+    // }
+    pub fn create(root_dir: &Path, _cache_size: i64) -> Result<Self> {
         debug!("Attempting to create new datastore at {}", root_dir.display());
-
+    
         // Create datastore directory
-        std::fs::create_dir(root_dir).with_context(|| {
+        std::fs::create_dir_all(root_dir).with_context(|| {
             format!("Failed to create datastore root directory at {}", root_dir.display())
         })?;
-
+    
         // Generate .gitignore file
         std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
             format!("Failed to write .gitignore to datastore at {}", root_dir.display())
         })?;
-
-        let mut ds = Self::open_impl(root_dir, cache_size)?;
-
-        ds.migrate_0_60()
-            .context("Failed to initialize database schema")?;
-
-        Self::open(root_dir, cache_size)
+    
+        let db_path = root_dir.join("datastore.pdb");
+        let db = Database::open(&db_path)?;
+    
+        Ok(Datastore { root_dir: root_dir.to_path_buf(), db })
     }
-
+    
+    pub fn open(root_dir: &Path, _cache_size: i64) -> Result<Self> {
+        debug!("Attempting to open existing datastore at {}", root_dir.display());
+    
+        let db_path = root_dir.join("datastore.pdb");
+        let db = Database::open(&db_path)?;
+    
+        Ok(Datastore { root_dir: root_dir.to_path_buf(), db })
+    }
+    
     /// Get the path to this datastore's scratch directory.
     pub fn scratch_dir(&self) -> PathBuf {
         self.root_dir.join("scratch")
@@ -143,12 +185,18 @@ impl Datastore {
     }
 
     /// Analyze the datastore's sqlite database, potentially allowing for better query planning
+    // pub fn analyze(&self) -> Result<()> {
+    //     let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
+    //     self.conn.execute("analyze", [])?;
+    //     // self.conn.execute("pragma wal_checkpoint(truncate)", [])?;
+    //     Ok(())
+    // }
     pub fn analyze(&self) -> Result<()> {
         let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
-        self.conn.execute("analyze", [])?;
-        // self.conn.execute("pragma wal_checkpoint(truncate)", [])?;
+        // PoloDB does not have an equivalent analyze function, so this can be left empty or perform maintenance tasks if needed.
         Ok(())
     }
+    
 }
 
 /// A datastore-specific ID of a blob; simply a newtype-like wrapper around an i64.
@@ -167,7 +215,7 @@ struct SnippetIdInt(i64);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MatchIdInt(i64);
 
-pub type BatchEntry = (ProvenanceSet, BlobMetadata, Vec<(Option<f64>, Match)>);
+pub type BatchEntry = (TargetSet, BlobMetadata, Vec<(Option<f64>, Match)>);
 
 /// A datastore transaction.
 /// Its lifetime parameter is for the datastore it belongs to.
@@ -265,18 +313,18 @@ impl<'ds> Transaction<'ds> {
         Ok(f)
     }
 
-    /// Record provenance metadata for a blob given its integer ID
-    fn mk_record_provenance(
+    /// Record target metadata for a blob given its integer ID
+    fn mk_record_target(
         &'ds self,
-    ) -> Result<impl FnMut(BlobIdInt, &'ds Provenance) -> rusqlite::Result<()>> {
-        let mut add_provenance = self.inner.prepare_cached(indoc! {r#"
-            insert into blob_provenance(blob_id, provenance)
+    ) -> Result<impl FnMut(BlobIdInt, &'ds Target) -> rusqlite::Result<()>> {
+        let mut add_target = self.inner.prepare_cached(indoc! {r#"
+            insert into blob_target(blob_id, target)
             values (?, ?)
             on conflict do nothing
         "#})?;
 
-        let f = move |BlobIdInt(blob_id), provenance| -> rusqlite::Result<()> {
-            add_provenance.execute((blob_id, provenance))?;
+        let f = move |BlobIdInt(blob_id), target| -> rusqlite::Result<()> {
+            add_target.execute((blob_id, target))?;
             Ok(())
         };
 
@@ -467,135 +515,212 @@ impl<'ds> Transaction<'ds> {
         Ok(f)
     }
 
-    /// Record the given data into the datastore.
-    /// Returns the number of matches that were newly added.
-    pub fn record(&self, batch: &[BatchEntry]) -> Result<u64> {
-        let mut record_blob_metadata = self.mk_record_blob_metadata()?;
-        let mut record_provenance = self.mk_record_provenance()?;
-        let mut record_match = self.mk_record_match()?;
+//     /// Record the given data into the datastore.
+//     /// Returns the number of matches that were newly added.
+//     pub fn record(&self, batch: &[BatchEntry]) -> Result<u64> {
+//         let mut record_blob_metadata = self.mk_record_blob_metadata()?;
+//         let mut record_target = self.mk_record_target()?;
+//         let mut record_match = self.mk_record_match()?;
 
-        let mut num_matches_added = 0;
+//         let mut num_matches_added = 0;
 
-        for (ps, md, ms) in batch {
-            // record blob metadata
-            let blob_id = record_blob_metadata(md).context("Failed to add blob metadata")?;
+//         for (ps, md, ms) in batch {
+//             // record blob metadata
+//             let blob_id = record_blob_metadata(md).context("Failed to add blob metadata")?;
 
-            // // record provenance metadata
-            for p in ps.iter() {
-                record_provenance(blob_id, p).context("Failed to record blob provenance")?;
-            }
+//             // // record target metadata
+//             for p in ps.iter() {
+//                 record_target(blob_id, p).context("Failed to record blob target")?;
+//             }
 
-            // record matches
-            for (s, m) in ms {
-                if record_match(blob_id, m, s).context("Failed to record match")? {
-                    num_matches_added += 1;
-                }
-            }
+//             // record matches
+//             for (s, m) in ms {
+//                 if record_match(blob_id, m, s).context("Failed to record match")? {
+//                     num_matches_added += 1;
+//                 }
+//             }
+//         }
+
+//         Ok(num_matches_added)
+//     }
+}
+
+pub fn record(&self, batch: &[BatchEntry]) -> Result<u64> {
+    let collection = self.db.collection("matches")?;
+    let mut num_matches_added = 0;
+
+    for (ps, md, ms) in batch {
+        let blob_doc = doc! {
+            "blob_id": md.id,
+            "num_bytes": md.num_bytes,
+            "mime_essence": md.mime_essence.clone(),
+            "charset": md.charset.clone(),
+        };
+        collection.insert_one(blob_doc, None)?;
+
+        for (score, m) in ms {
+            let match_doc = doc! {
+                "blob_id": md.id,
+                "start_byte": m.location.offset_span.start,
+                "end_byte": m.location.offset_span.end,
+                "groups": m.groups.clone(),
+                "rule_structural_id": m.rule_structural_id.clone(),
+                "rule_name": m.rule_name.clone(),
+                "rule_text_id": m.rule_text_id.clone(),
+                "snippet_before": m.snippet.before.clone(),
+                "snippet_matching": m.snippet.matching.clone(),
+                "snippet_after": m.snippet.after.clone(),
+                "score": score.clone(),
+            };
+            collection.insert_one(match_doc, None)?;
+            num_matches_added += 1;
         }
-
-        Ok(num_matches_added)
     }
+
+    Ok(num_matches_added)
 }
 
 impl Datastore {
     /// Begin a new transaction.
-    pub fn begin(&mut self) -> Result<Transaction> {
-        let inner = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        Ok(Transaction { inner })
+    // pub fn begin(&mut self) -> Result<Transaction> {
+    //     let inner = self
+    //         .conn
+    //         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    //     Ok(Transaction { inner })
+    // }
+    pub fn begin(&self) -> Result<()> {
+        let _span = debug_span!("Datastore::begin", "{}", self.root_dir.display()).entered();
+        // PoloDB doesn't have explicit transactions, so this can be left empty or manage atomic operations if needed.
+        Ok(())
     }
 
-    /// How many matches are there, total, in the datastore?
+    
+    // /// How many matches are there, total, in the datastore?
+    // pub fn get_num_matches(&self) -> Result<u64> {
+    //     let mut stmt = self.conn.prepare_cached(indoc! {r#"
+    //         select count(*) from match
+    //     "#})?;
+    //     let num_matches: u64 = stmt.query_row((), val_from_row)?;
+    //     Ok(num_matches)
+    // }
+
+    // /// How many findings are there, total, in the datastore?
+    // pub fn get_num_findings(&self) -> Result<u64> {
+    //     let mut stmt = self.conn.prepare_cached(indoc! {r#"
+    //         select count(*) from finding
+    //     "#})?;
+    //     let num_findings: u64 = stmt.query_row((), val_from_row)?;
+    //     Ok(num_findings)
+    // }
+
+    // /// Get a summary of all recorded findings.
+    // pub fn get_summary(&self) -> Result<FindingSummary> {
+    //     let _span = debug_span!("Datastore::get_summary", "{}", self.root_dir.display()).entered();
+
+    //     // XXX this should be moved into a view in the datastore (probably should replace
+    //     // `finding_summary`), but it is inlined here instead to avoid a schema migration for now
+    //     let mut stmt = self.conn.prepare_cached(indoc! {r#"
+    //         with
+    //             -- table of relevant per-match information
+    //             m as (
+    //                 select
+    //                     f.finding_id finding_id,
+    //                     r.name rule_name,
+    //                     r.structural_id rule_structural_id,
+    //                     ms.status match_status
+    //                 from
+    //                     finding f
+    //                     inner join match m on (m.finding_id = f.id)
+    //                     inner join rule r on (f.rule_id = r.id)
+    //                     left outer join match_status ms on (m.id = ms.match_id)
+    //             ),
+    //             -- summarize per-match information by finding
+    //             f as (
+    //                 select
+    //                     finding_id,
+    //                     rule_name,
+    //                     rule_structural_id,
+    //                     case group_concat(distinct match_status)
+    //                         when 'accept' then 'accept'
+    //                         when 'reject' then 'reject'
+    //                         when 'accept,reject' then 'mixed'
+    //                         when 'reject,accept' then 'mixed'
+    //                     end finding_status,
+    //                     count(*) num_matches,
+    //                     sum(case when match_status = 'accept' then 1 else 0 end) num_accept_matches,
+    //                     sum(case when match_status = 'reject' then 1 else 0 end) num_reject_matches,
+    //                     sum(case when match_status is null then 1 else 0 end) num_unlabeled_matches
+    //                 from m
+    //                 group by finding_id
+    //             )
+    //         select
+    //             rule_name,
+    //             -- rule_structural_id,
+    //             count(distinct finding_id) total_findings,
+    //             sum(num_matches) total_matches,
+    //             sum(case when finding_status = 'accept' then 1 else 0 end) accept_findings,
+    //             sum(case when finding_status = 'reject' then 1 else 0 end) reject_findings,
+    //             sum(case when finding_status = 'mixed' then 1 else 0 end) mixed_findings,
+    //             sum(case when finding_status is null then 1 else 0 end) unlabeled_findings
+    //             -- ,
+    //             -- sum(num_accept_matches) accept_matches,
+    //             -- sum(num_reject_matches) reject_matches,
+    //             -- sum(num_unlabeled_matches) unlabeled_matches
+    //         from
+    //             f
+    //         group by rule_name, rule_structural_id
+    //     "#})?;
+    //     let entries = stmt.query_map((), |row| {
+    //         Ok(FindingSummaryEntry {
+    //             rule_name: row.get(0)?,
+    //             distinct_count: row.get(1)?,
+    //             total_count: row.get(2)?,
+    //             accept_count: row.get(3)?,
+    //             reject_count: row.get(4)?,
+    //             mixed_count: row.get(5)?,
+    //             unlabeled_count: row.get(6)?,
+    //         })
+    //     })?;
+    //     let es = collect(entries)?;
+    //     Ok(FindingSummary(es))
+    // }
+
     pub fn get_num_matches(&self) -> Result<u64> {
-        let mut stmt = self.conn.prepare_cached(indoc! {r#"
-            select count(*) from match
-        "#})?;
-        let num_matches: u64 = stmt.query_row((), val_from_row)?;
-        Ok(num_matches)
+        let collection = self.db.collection("matches")?;
+        let count = collection.count_documents(doc! {}, None)?;
+        Ok(count as u64)
     }
-
-    /// How many findings are there, total, in the datastore?
+    
     pub fn get_num_findings(&self) -> Result<u64> {
-        let mut stmt = self.conn.prepare_cached(indoc! {r#"
-            select count(*) from finding
-        "#})?;
-        let num_findings: u64 = stmt.query_row((), val_from_row)?;
-        Ok(num_findings)
+        let collection = self.db.collection("findings")?;
+        let count = collection.count_documents(doc! {}, None)?;
+        Ok(count as u64)
     }
-
-    /// Get a summary of all recorded findings.
+    
     pub fn get_summary(&self) -> Result<FindingSummary> {
         let _span = debug_span!("Datastore::get_summary", "{}", self.root_dir.display()).entered();
-
-        // XXX this should be moved into a view in the datastore (probably should replace
-        // `finding_summary`), but it is inlined here instead to avoid a schema migration for now
-        let mut stmt = self.conn.prepare_cached(indoc! {r#"
-            with
-                -- table of relevant per-match information
-                m as (
-                    select
-                        f.finding_id finding_id,
-                        r.name rule_name,
-                        r.structural_id rule_structural_id,
-                        ms.status match_status
-                    from
-                        finding f
-                        inner join match m on (m.finding_id = f.id)
-                        inner join rule r on (f.rule_id = r.id)
-                        left outer join match_status ms on (m.id = ms.match_id)
-                ),
-                -- summarize per-match information by finding
-                f as (
-                    select
-                        finding_id,
-                        rule_name,
-                        rule_structural_id,
-                        case group_concat(distinct match_status)
-                            when 'accept' then 'accept'
-                            when 'reject' then 'reject'
-                            when 'accept,reject' then 'mixed'
-                            when 'reject,accept' then 'mixed'
-                        end finding_status,
-                        count(*) num_matches,
-                        sum(case when match_status = 'accept' then 1 else 0 end) num_accept_matches,
-                        sum(case when match_status = 'reject' then 1 else 0 end) num_reject_matches,
-                        sum(case when match_status is null then 1 else 0 end) num_unlabeled_matches
-                    from m
-                    group by finding_id
-                )
-            select
-                rule_name,
-                -- rule_structural_id,
-                count(distinct finding_id) total_findings,
-                sum(num_matches) total_matches,
-                sum(case when finding_status = 'accept' then 1 else 0 end) accept_findings,
-                sum(case when finding_status = 'reject' then 1 else 0 end) reject_findings,
-                sum(case when finding_status = 'mixed' then 1 else 0 end) mixed_findings,
-                sum(case when finding_status is null then 1 else 0 end) unlabeled_findings
-                -- ,
-                -- sum(num_accept_matches) accept_matches,
-                -- sum(num_reject_matches) reject_matches,
-                -- sum(num_unlabeled_matches) unlabeled_matches
-            from
-                f
-            group by rule_name, rule_structural_id
-        "#})?;
-        let entries = stmt.query_map((), |row| {
-            Ok(FindingSummaryEntry {
-                rule_name: row.get(0)?,
-                distinct_count: row.get(1)?,
-                total_count: row.get(2)?,
-                accept_count: row.get(3)?,
-                reject_count: row.get(4)?,
-                mixed_count: row.get(5)?,
-                unlabeled_count: row.get(6)?,
-            })
-        })?;
-        let es = collect(entries)?;
-        Ok(FindingSummary(es))
+        let collection = self.db.collection("findings")?;
+        
+        let cursor = collection.find(doc! {}, None)?;
+        let mut entries = vec![];
+    
+        for result in cursor {
+            let doc = result?;
+            let entry = FindingSummaryEntry {
+                rule_name: doc.get_str("rule_name")?.to_string(),
+                distinct_count: doc.get_i32("distinct_count")? as u64,
+                total_count: doc.get_i32("total_count")? as u64,
+                accept_count: doc.get_i32("accept_count")? as u64,
+                reject_count: doc.get_i32("reject_count")? as u64,
+                mixed_count: doc.get_i32("mixed_count")? as u64,
+                unlabeled_count: doc.get_i32("unlabeled_count")? as u64,
+            };
+            entries.push(entry);
+        }
+    
+        Ok(FindingSummary(entries))
     }
-
+    
     /// Get annotations from this datastore.
     pub fn get_annotations(&self) -> Result<Annotations> {
         let _span =
@@ -996,9 +1121,9 @@ impl Datastore {
         let mut es = Vec::new();
         for e in entries {
             let (md, id, m, match_score, match_comment, match_status) = e?;
-            let ps = self.get_provenance_set(&md)?;
+            let ps = self.get_target_set(&md)?;
             es.push(FindingDataEntry {
-                provenance: ps,
+                target: ps,
                 blob_metadata: md,
                 match_id: id,
                 match_val: m,
@@ -1010,20 +1135,20 @@ impl Datastore {
         Ok(es)
     }
 
-    fn get_provenance_set(&self, metadata: &BlobMetadata) -> Result<ProvenanceSet> {
+    fn get_target_set(&self, metadata: &BlobMetadata) -> Result<TargetSet> {
         let mut get = self.conn.prepare_cached(indoc! {r#"
-            select provenance
-            from blob_provenance_denorm
+            select target
+            from blob_target_denorm
             where blob_id = ?
-            order by provenance
+            order by target
         "#})?;
 
         let ps = get.query_map((metadata.id,), val_from_row)?;
 
         let results = collect(ps)?;
-        match ProvenanceSet::try_from_iter(results) {
+        match TargetSet::try_from_iter(results) {
             Some(ps) => Ok(ps),
-            None => bail!("should have at least 1 provenance entry"),
+            None => bail!("should have at least 1 target entry"),
         }
     }
 

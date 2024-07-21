@@ -1,6 +1,6 @@
 use crate::blob_metadata::BlobMetadata;
 use crate::match_type::Match;
-use crate::provenance_set::ProvenanceSet;
+use crate::target_set::TargetSet;
 
 use super::MatchIdInt;
 use super::Status;
@@ -17,7 +17,7 @@ pub type FindingData = Vec<FindingDataEntry>;
 /// Data for a single `Match`
 #[derive(Debug)]
 pub struct FindingDataEntry {
-    pub provenance: ProvenanceSet,
+    pub target: TargetSet,
     pub blob_metadata: BlobMetadata,
     pub match_id: MatchIdInt,
     pub match_val: Match,

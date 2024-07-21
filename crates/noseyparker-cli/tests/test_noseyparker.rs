@@ -20,7 +20,7 @@ mod scan;
 // TODO(test): add tests for SARIF output format
 
 // TODO(test): add tests for blob metadata recording
-// TODO(test): add tests for rerunning with changing `--blob-metadata` and `--git-blob-provenance` options
+// TODO(test): add tests for rerunning with changing `--blob-metadata` and `--git-blob-target` options
 
 // TODO(test): add tests for trying to open existing datastores from other Nosey Parker versions
 // TODO(test): add tests for enumerating GitHub Enterprise with the `--ignore-certs` optino

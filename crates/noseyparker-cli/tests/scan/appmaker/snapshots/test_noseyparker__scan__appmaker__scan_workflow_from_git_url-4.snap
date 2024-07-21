@@ -40,7 +40,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "my.env",
@@ -114,7 +114,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "tmp.env",
@@ -188,7 +188,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "tmp.env",
@@ -262,7 +262,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "my.env",
@@ -336,7 +336,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/vendor/webmaker-auth-client/example/index.html",
@@ -410,7 +410,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/start.html",
@@ -469,7 +469,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/start.html",
@@ -528,7 +528,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/start.html",
@@ -602,7 +602,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/vendor/listjs/README.md",
@@ -676,7 +676,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "tmp.env",
@@ -750,7 +750,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/vendor/bootstrap/test-infra/README.md",
@@ -841,7 +841,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/vendor/bootstrap/test-infra/README.md",
@@ -932,7 +932,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "public/vendor/bootstrap/test-infra/README.md",
@@ -1023,7 +1023,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "my.env",
@@ -1097,7 +1097,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "tmp.env",
@@ -1171,7 +1171,7 @@ expression: read_json(report_json.path()).unwrap()
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "first_commit": {
               "blob_path": "tmp.env",

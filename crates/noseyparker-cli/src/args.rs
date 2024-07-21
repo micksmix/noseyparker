@@ -750,12 +750,12 @@ pub struct MetadataArgs {
     #[arg(long, default_value_t=BlobMetadataMode::Matching, value_name="MODE")]
     pub blob_metadata: BlobMetadataMode,
 
-    /// Specify which Git commit provenance metadata will be collected
+    /// Specify which Git commit target metadata will be collected
     ///
     /// This should not need to be changed unless you are running into performance problems on a
     /// problematic Git repository input.
-    #[arg(long, default_value_t=GitBlobProvenanceMode::FirstSeen, value_name="MODE")]
-    pub git_blob_provenance: GitBlobProvenanceMode,
+    #[arg(long, default_value_t=GitBlobTargetMode::FirstSeen, value_name="MODE")]
+    pub git_blob_target: GitBlobTargetMode,
 }
 
 #[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -786,7 +786,7 @@ pub enum CopyBlobsMode {
 
 #[derive(Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 #[strum(serialize_all = "kebab-case")]
-pub enum GitBlobProvenanceMode {
+pub enum GitBlobTargetMode {
     /// The Git repository and set of commits and accompanying pathnames in which a blob is first
     /// seen
     FirstSeen,

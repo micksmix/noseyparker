@@ -188,8 +188,8 @@ Metadata Collection Options:
           - matching: Record metadata only for blobs with matches
           - none:     Record metadata for no blobs
 
-      --git-blob-provenance <MODE>
-          Specify which Git commit provenance metadata will be collected
+      --git-blob-target <MODE>
+          Specify which Git commit target metadata will be collected
           
           This should not need to be changed unless you are running into performance problems on a
           problematic Git repository input.

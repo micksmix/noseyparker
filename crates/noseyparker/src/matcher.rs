@@ -8,7 +8,7 @@ use crate::blob::Blob;
 use crate::blob_id_map::BlobIdMap;
 use crate::location::OffsetSpan;
 use crate::matcher_stats::MatcherStats;
-use crate::provenance_set::ProvenanceSet;
+use crate::target_set::TargetSet;
 use crate::rules_database::RulesDatabase;
 
 // -------------------------------------------------------------------------------------------------
@@ -151,7 +151,7 @@ impl<'a> Matcher<'a> {
     /// If the blob was already scanned, `None` is returned.
     /// Otherwise, the matches found within the blob are returned.
     ///
-    /// NOTE: `provenance` is used only for diagnostic purposes if something goes wrong.
+    /// NOTE: `target` is used only for diagnostic purposes if something goes wrong.
     ///
     /// NOTE: There is a race condition in determining if a blob was already scanned.
     /// There is a chance that when using multiple scanning threads that a blob will be scanned
@@ -161,7 +161,7 @@ impl<'a> Matcher<'a> {
     pub fn scan_blob<'b>(
         &mut self,
         blob: &'b Blob,
-        provenance: &ProvenanceSet,
+        target: &TargetSet,
     ) -> Result<ScanResult<'b>>
     where
         'a: 'b,
@@ -250,14 +250,14 @@ impl<'a> Matcher<'a> {
                             error!("\
                                 Regex failed to match where vectorscan did; something is probably odd about the rule:\n\
                                 Blob: {}\n\
-                                Provenance: {}\n\
+                                Target: {}\n\
                                 Offsets: [{start_idx}..{end_idx}]\n\
                                 Rule id: {rule_id}\n\
                                 Rule name: {:?}:\n\
                                 Regex: {re:?}:\n\
                                 Snippet: {cxt:?}",
                                 &blob.id,
-                                provenance.first(),
+                                target.first(),
                                 rule.name(),
                             );
                         // });

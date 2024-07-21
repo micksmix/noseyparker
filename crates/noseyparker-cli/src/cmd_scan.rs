@@ -25,11 +25,11 @@ use noseyparker::location;
 use noseyparker::match_type::Match;
 use noseyparker::matcher::{Matcher, ScanResult};
 use noseyparker::matcher_stats::MatcherStats;
-use noseyparker::provenance::Provenance;
-use noseyparker::provenance_set::ProvenanceSet;
+use noseyparker::target::Target;
+use noseyparker::target_set::TargetSet;
 use noseyparker::rules_database::RulesDatabase;
 
-type DatastoreMessage = (ProvenanceSet, BlobMetadata, Vec<(Option<f64>, Match)>);
+type DatastoreMessage = (TargetSet, BlobMetadata, Vec<(Option<f64>, Match)>);
 
 /// This command scans multiple filesystem inputs for secrets.
 /// The implementation enumerates content in parallel, scans the enumerated content in parallel,
@@ -276,9 +276,9 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             });
 
             // Determine whether to collect git metadata or not
-            let collect_git_metadata = match args.metadata_args.git_blob_provenance {
-                args::GitBlobProvenanceMode::FirstSeen => true,
-                args::GitBlobProvenanceMode::Minimal => false,
+            let collect_git_metadata = match args.metadata_args.git_blob_target {
+                args::GitBlobTargetMode::FirstSeen => true,
+                args::GitBlobTargetMode::Minimal => false,
             };
             ie.collect_git_metadata(collect_git_metadata);
 
@@ -463,7 +463,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
 
                 run_matcher(
                     matcher,
-                    ProvenanceSet::new(Provenance::from_file(fname.clone()), Vec::new()),
+                    TargetSet::new(Target::from_file(fname.clone()), Vec::new()),
                     blob,
                     &send_ds,
                     args.snippet_length,
@@ -539,14 +539,14 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                             }
                         };
 
-                        let provenance = {
+                        let target = {
                             let mut it = md.first_seen.iter();
                             if let Some(e) = it.next() {
                                 let commit_metadata = git_repo_result
                                     .commit_metadata
                                     .get(&e.commit_oid)
                                     .expect("should have commit metadata");
-                                let p = Provenance::from_git_repo_with_first_commit(
+                                let p = Target::from_git_repo_with_first_commit(
                                     repo_path.clone(),
                                     commit_metadata.clone(),
                                     e.path.clone(),
@@ -558,7 +558,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                                             .commit_metadata
                                             .get(&e.commit_oid)
                                             .expect("should have commit metadata");
-                                        Provenance::from_git_repo_with_first_commit(
+                                        Target::from_git_repo_with_first_commit(
                                             repo_path.clone(),
                                             commit_metadata.clone(),
                                             e.path.clone(),
@@ -566,10 +566,10 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                                     })
                                     .collect();
 
-                                ProvenanceSet::new(p, ps)
+                                TargetSet::new(p, ps)
                             } else {
-                                ProvenanceSet::new(
-                                    Provenance::from_git_repo(repo_path.clone()),
+                                TargetSet::new(
+                                    Target::from_git_repo(repo_path.clone()),
                                     Vec::new(),
                                 )
                             }
@@ -577,7 +577,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
 
                         run_matcher(
                             matcher,
-                            provenance,
+                            target,
                             blob,
                             &send_ds,
                             args.snippet_length,
@@ -680,12 +680,12 @@ struct MetadataResult {
 }
 
 impl MetadataResult {
-    fn from_blob_and_provenance(
+    fn from_blob_and_target(
         guesser: &Guesser,
         blob: &Blob,
-        provenance: &ProvenanceSet,
+        target: &TargetSet,
     ) -> MetadataResult {
-        let blob_path: Option<&'_ Path> = provenance.iter().find_map(|p| p.blob_path());
+        let blob_path: Option<&'_ Path> = target.iter().find_map(|p| p.blob_path());
         let input = match blob_path {
             None => content_guesser::Input::from_bytes(&blob.bytes),
             Some(blob_path) => content_guesser::Input::from_path_and_bytes(blob_path, &blob.bytes),
@@ -705,7 +705,7 @@ impl MetadataResult {
 #[allow(clippy::too_many_arguments)]
 fn run_matcher(
     matcher_guesser: &mut (Matcher, Guesser),
-    provenance: ProvenanceSet,
+    target: TargetSet,
     blob: Blob,
     send_ds: &crossbeam_channel::Sender<DatastoreMessage>,
     snippet_length: usize,
@@ -720,14 +720,14 @@ fn run_matcher(
     let (matcher, guesser) = matcher_guesser;
 
     let t1 = Instant::now();
-    let res = matcher.scan_blob(&blob, &provenance);
+    let res = matcher.scan_blob(&blob, &target);
     let scan_time = t1.elapsed();
     let scan_us = scan_time.as_micros();
 
     match res {
         Err(e) => {
             progress.suspend(|| {
-                error!("Failed to scan blob {} from {}: {e}", blob.id, provenance.first())
+                error!("Failed to scan blob {} from {}: {e}", blob.id, target.first())
             });
             Ok(())
         }
@@ -738,7 +738,7 @@ fn run_matcher(
             Ok(())
         }
 
-        // blob already seen; all we need to do is record its provenance
+        // blob already seen; all we need to do is record its target
         Ok(ScanResult::SeenWithMatches) => {
             trace!("({scan_us}us) blob already scanned with matches");
             let metadata = BlobMetadata {
@@ -748,12 +748,12 @@ fn run_matcher(
                 charset: None,
             };
             send_ds
-                .send((provenance, metadata, Vec::new()))
+                .send((target, metadata, Vec::new()))
                 .context("Failed to save blob scan results")?;
             Ok(())
         }
 
-        // blob has not been seen; need to record blob metadata, provenance, and matches
+        // blob has not been seen; need to record blob metadata, target, and matches
         Ok(ScanResult::New(matches)) => {
             trace!("({scan_us}us) blob newly scanned; {} matches", matches.len());
 
@@ -780,7 +780,7 @@ fn run_matcher(
 
             // If there are no matches, we can bail out here and avoid recording anything.
             // UNLESS the `--blob-metadata=all` mode was specified; then we need to record the
-            // provenance for _all_ seen blobs.
+            // target for _all_ seen blobs.
             if blob_metadata_recording_mode != args::BlobMetadataMode::All && matches.is_empty() {
                 return Ok(());
             }
@@ -793,7 +793,7 @@ fn run_matcher(
                     charset: None,
                 },
                 _ => {
-                    let md = MetadataResult::from_blob_and_provenance(guesser, &blob, &provenance);
+                    let md = MetadataResult::from_blob_and_target(guesser, &blob, &target);
                     BlobMetadata {
                         id: blob.id,
                         num_bytes: blob.len(),
@@ -829,7 +829,7 @@ fn run_matcher(
             };
 
             send_ds
-                .send((provenance, metadata, matches))
+                .send((target, metadata, matches))
                 .context("Failed to save results")?;
             Ok(())
         }

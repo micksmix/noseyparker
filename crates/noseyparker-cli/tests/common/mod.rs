@@ -297,8 +297,8 @@ pub fn get_report_stdout_filters() -> Vec<(&'static str, &'static str)> {
 
 pub fn get_report_json_redactions() -> Vec<(&'static str, Redaction)> {
     vec![
-        ("[].matches[].provenance[].path", Redaction::from("<ROOT>/input.txt")),
-        ("[].matches[].provenance[].repo_path", Redaction::from("<REPO>")),
+        ("[].matches[].target[].path", Redaction::from("<ROOT>/input.txt")),
+        ("[].matches[].target[].repo_path", Redaction::from("<REPO>")),
         ("[].score", insta::rounded_redaction(3)),
         ("[].matches[].score", insta::rounded_redaction(3)),
     ]

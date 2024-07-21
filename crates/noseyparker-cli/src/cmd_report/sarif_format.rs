@@ -30,12 +30,12 @@ impl DetailsReporter {
             .iter()
             .flat_map(|m| {
                 let ReportMatch {
-                    provenance,
+                    target,
                     blob_metadata,
                     m,
                     ..
                 } = m;
-                provenance.iter().map(move |p| {
+                target.iter().map(move |p| {
                     let source_span = &m.location.source_span;
                     // let offset_span = &m.location.offset_span;
 

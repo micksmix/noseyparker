@@ -64,22 +64,22 @@ CREATE TABLE blob_source_span
     )
 ) STRICT;
 
-CREATE TABLE blob_provenance
+CREATE TABLE blob_target
 -- This table records the various ways in which blobs were encountered.
 -- A blob can be encountered multiple ways when scanning; this table records all of them.
 (
     -- The integer identifier of the blob
     blob_id integer not null references blob(id),
 
-    -- The minified JSON-formatted provenance information
+    -- The minified JSON-formatted target information
     -- XXX: deduplicate these values via another table?
-    -- XXX: allow recursive representation of provenance values? I.e., structural decomposition and sharing, like `git repo` -> `commit` -> `blob path`?
+    -- XXX: allow recursive representation of target values? I.e., structural decomposition and sharing, like `git repo` -> `commit` -> `blob path`?
     -- XXX: define special JSON object fields that will be handled specially by NP? E.g., `path`, `repo_path`, ...?
-    provenance text not null,
+    target text not null,
 
-    unique(blob_id, provenance),
+    unique(blob_id, target),
 
-    constraint payload_valid check(json_type(provenance) = 'object')
+    constraint payload_valid check(json_type(target) = 'object')
 ) STRICT;
 
 --------------------------------------------------------------------------------
@@ -360,20 +360,20 @@ from
     left outer join blob_charset bc on (b.id = bc.blob_id)
 ;
 
-CREATE VIEW blob_provenance_denorm
--- A convenience view for blob provenance in denormalized form rather than the
+CREATE VIEW blob_target_denorm
+-- A convenience view for blob target in denormalized form rather than the
 -- low-level datastore form that involves numerous indirection.
 (
     blob_id,
-    provenance
+    target
 )
 as
 select
     b.blob_id,
-    bp.provenance
+    bp.target
 from
     blob b
-    inner join blob_provenance bp on (b.id = bp.blob_id)
+    inner join blob_target bp on (b.id = bp.blob_id)
 ;
 
 CREATE VIEW finding_denorm

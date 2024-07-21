@@ -26,7 +26,7 @@ expression: json_output
           }
         },
         "match_content": "AKIADEADBEEFDEADBEEF",
-        "provenance": {
+        "target": {
           "kind": "file",
           "path": "<ROOT>/input.txt"
         },

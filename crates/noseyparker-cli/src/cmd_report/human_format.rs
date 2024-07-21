@@ -103,7 +103,7 @@ impl<'a> Display for PrettyFinding<'a> {
         for (i, rm) in finding.matches.iter().enumerate() {
             let i = i + 1;
             let ReportMatch {
-                provenance,
+                target,
                 blob_metadata,
                 m,
                 score,
@@ -145,10 +145,10 @@ impl<'a> Display for PrettyFinding<'a> {
                 )
             };
 
-            // FIXME: limit the total number of provenance entries displayed
-            for p in provenance.iter() {
+            // FIXME: limit the total number of target entries displayed
+            for p in target.iter() {
                 match p {
-                    Provenance::File(e) => {
+                    Target::File(e) => {
                         writeln!(
                             f,
                             "{} {}",
@@ -156,7 +156,7 @@ impl<'a> Display for PrettyFinding<'a> {
                             reporter.style_metadata(e.path.display()),
                         )?;
                     }
-                    Provenance::GitRepo(e) => {
+                    Target::GitRepo(e) => {
                         writeln!(
                             f,
                             "{} {}",
@@ -196,11 +196,11 @@ impl<'a> Display for PrettyFinding<'a> {
                         }
                     }
                     // FIXME(overhaul): implement this case properly
-                    Provenance::Extended(e) => {
+                    Target::Extended(e) => {
                         writeln!(
                             f,
                             "{} {}",
-                            reporter.style_heading("Extended Provenance:"),
+                            reporter.style_heading("Extended Target:"),
                             reporter.style_metadata(e),
                         )?;
                     }

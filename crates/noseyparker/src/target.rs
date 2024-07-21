@@ -6,37 +6,37 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 // -------------------------------------------------------------------------------------------------
-// Provenance
+// Target
 // -------------------------------------------------------------------------------------------------
-/// `Provenance` indicates where a particular blob or match was found when scanning.
+/// `Target` indicates where a particular blob or match was found when scanning.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[allow(clippy::large_enum_variant)]
-pub enum Provenance {
-    File(FileProvenance),
-    GitRepo(GitRepoProvenance),
-    Extended(ExtendedProvenance),
+pub enum Target {
+    File(FileTarget),
+    GitRepo(GitRepoTarget),
+    Extended(ExtendedTarget),
 }
 
-impl Provenance {
-    /// Create a `Provenance` entry for a plain file.
+impl Target {
+    /// Create a `Target` entry for a plain file.
     pub fn from_file(path: PathBuf) -> Self {
-        Provenance::File(FileProvenance { path })
+        Target::File(FileTarget { path })
     }
 
-    /// Create a `Provenance` entry for a blob found within a Git repo's history, without any extra
-    /// commit provenance.
+    /// Create a `Target` entry for a blob found within a Git repo's history, without any extra
+    /// commit target.
     ///
     /// See also `from_git_repo_with_first_commit`.
     pub fn from_git_repo(repo_path: PathBuf) -> Self {
-        Provenance::GitRepo(GitRepoProvenance {
+        Target::GitRepo(GitRepoTarget {
             repo_path,
             first_commit: None,
         })
     }
 
-    /// Create a `Provenance` entry for a blob found within a Git repo's history, with commit
-    /// provenance.
+    /// Create a `Target` entry for a blob found within a Git repo's history, with commit
+    /// target.
     ///
     /// See also `from_git_repo`.
     pub fn from_git_repo_with_first_commit(
@@ -44,22 +44,22 @@ impl Provenance {
         commit_metadata: CommitMetadata,
         blob_path: BString,
     ) -> Self {
-        let first_commit = Some(CommitProvenance {
+        let first_commit = Some(CommitTarget {
             commit_metadata,
             blob_path,
         });
-        Provenance::GitRepo(GitRepoProvenance {
+        Target::GitRepo(GitRepoTarget {
             repo_path,
             first_commit,
         })
     }
 
-    /// Create a `Provenance` entry from an arbitrary JSON value.
+    /// Create a `Target` entry from an arbitrary JSON value.
     pub fn from_extended(value: serde_json::Value) -> Self {
-        Provenance::Extended(ExtendedProvenance(value))
+        Target::Extended(ExtendedTarget(value))
     }
 
-    /// Get the path for the blob from this `Provenance` entry, if one is specified.
+    /// Get the path for the blob from this `Target` entry, if one is specified.
     pub fn blob_path(&self) -> Option<&Path> {
         use bstr::ByteSlice;
         match self {
@@ -73,11 +73,11 @@ impl Provenance {
     }
 }
 
-impl std::fmt::Display for Provenance {
+impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Provenance::File(e) => write!(f, "file {}", e.path.display()),
-            Provenance::GitRepo(e) => match &e.first_commit {
+            Target::File(e) => write!(f, "file {}", e.path.display()),
+            Target::GitRepo(e) => match &e.first_commit {
                 Some(md) => write!(
                     f,
                     "git repo {}: first seen in commit {} as {}",
@@ -87,7 +87,7 @@ impl std::fmt::Display for Provenance {
                 ),
                 None => write!(f, "git repo {}", e.repo_path.display()),
             },
-            Provenance::Extended(e) => {
+            Target::Extended(e) => {
                 write!(f, "extended {}", e)
             }
         }
@@ -95,30 +95,30 @@ impl std::fmt::Display for Provenance {
 }
 
 // -------------------------------------------------------------------------------------------------
-// FileProvenance
+// FileTarget
 // -------------------------------------------------------------------------------------------------
 /// Indicates that a blob was seen at a particular file path
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct FileProvenance {
+pub struct FileTarget {
     pub path: PathBuf,
 }
 
 // -------------------------------------------------------------------------------------------------
-// GitRepoProvenance
+// GitRepoTarget
 // -------------------------------------------------------------------------------------------------
-/// Indicates that a blob was seen in a Git repo, optionally with particular commit provenance info
+/// Indicates that a blob was seen in a Git repo, optionally with particular commit target info
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct GitRepoProvenance {
+pub struct GitRepoTarget {
     pub repo_path: PathBuf,
-    pub first_commit: Option<CommitProvenance>,
+    pub first_commit: Option<CommitTarget>,
 }
 
 // -------------------------------------------------------------------------------------------------
-// CommitProvenance
+// CommitTarget
 // -------------------------------------------------------------------------------------------------
 /// How was a particular Git commit encountered?
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct CommitProvenance {
+pub struct CommitTarget {
     pub commit_metadata: CommitMetadata,
 
     #[serde(with = "BStringLossyUtf8")]
@@ -126,9 +126,9 @@ pub struct CommitProvenance {
 }
 
 // -------------------------------------------------------------------------------------------------
-// ExtendedProvenance
+// ExtendedTarget
 // -------------------------------------------------------------------------------------------------
-/// An extended provenance entry.
+/// An extended target entry.
 ///
 /// This is an arbitrary JSON value.
 /// If the value is an object containing certain fields, they will be interpreted specially by
@@ -145,15 +145,15 @@ pub struct CommitProvenance {
 // - XXX A `parent_start_byte` integer field
 // - XXX A `parent_end_byte` integer field
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ExtendedProvenance(pub serde_json::Value);
+pub struct ExtendedTarget(pub serde_json::Value);
 
-impl std::fmt::Display for ExtendedProvenance {
+impl std::fmt::Display for ExtendedTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.0, f)
     }
 }
 
-impl ExtendedProvenance {
+impl ExtendedTarget {
     pub fn path(&self) -> Option<&Path> {
         let p = self.0.get("path")?.as_str()?;
         Some(Path::new(p))
@@ -169,7 +169,7 @@ mod sql {
     use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
     use rusqlite::Error::ToSqlConversionFailure;
 
-    impl ToSql for Provenance {
+    impl ToSql for Target {
         fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
             match serde_json::to_string(self) {
                 Err(e) => Err(ToSqlConversionFailure(e.into())),
@@ -178,7 +178,7 @@ mod sql {
         }
     }
 
-    impl FromSql for Provenance {
+    impl FromSql for Target {
         fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
             let s = value.as_str()?;
             serde_json::from_str(s).map_err(|e| FromSqlError::Other(e.into()))

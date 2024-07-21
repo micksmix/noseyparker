@@ -10,7 +10,7 @@ noseyparker-scan - Scan content for secrets
 \[**--all-github-organizations**\] \[**--github-api-url**\]
 \[**--git-clone**\] \[**--git-history**\] \[**--max-file-size**\]
 \[**-i**\|**--ignore**\] \[**--blob-metadata**\]
-\[**--git-blob-provenance**\] \[**--snippet-length**\]
+\[**--git-blob-target**\] \[**--snippet-length**\]
 \[**--copy-blobs**\] \[**--ignore-certs**\] \[**-v**\|**--verbose**\]...
 \[**-q**\|**--quiet**\] \[**--color**\] \[**--progress**\]
 \[**--rlimit-nofile**\] \[**--sqlite-cache-size**\]
@@ -182,8 +182,8 @@ Specify which blobs will have metadata recorded
 
 - none: Record metadata for no blobs
 
-**--git-blob-provenance**=*MODE* \[default: first-seen\]  
-Specify which Git commit provenance metadata will be collected
+**--git-blob-target**=*MODE* \[default: first-seen\]  
+Specify which Git commit target metadata will be collected
 
 This should not need to be changed unless you are running into
 performance problems on a problematic Git repository input.  

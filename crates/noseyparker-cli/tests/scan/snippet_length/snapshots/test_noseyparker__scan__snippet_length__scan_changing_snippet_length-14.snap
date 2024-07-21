@@ -38,7 +38,7 @@ expression: json_output
             }
           }
         },
-        "provenance": [
+        "target": [
           {
             "kind": "file",
             "path": "<ROOT>/input.txt"

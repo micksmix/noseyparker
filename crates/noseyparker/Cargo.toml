@@ -39,7 +39,7 @@ noseyparker-rules = { path = "../noseyparker-rules" }
 progress = { path = "../progress" }
 regex = "1.7"
 reqwest = { version = "0.12", features = ["json", "native-tls-vendored"] }
-rusqlite = { version = "0.31", features = ["bundled", "backup", "serde_json"] }
+# rusqlite = { version = "0.31", features = ["bundled", "backup", "serde_json"] }
 schemars = { version = "0.8", features = ["smallvec"] }
 secrecy = "0.8.0"
 smallvec = { version = "1", features = ["const_generics", "const_new", "union"] }
@@ -50,6 +50,7 @@ tokio = "1.23"
 tracing = "0.1"
 url = "2.3"
 vectorscan-rs = { version = "0.0.2" }
+polodb_core = "4.4.1"
 
 [dev-dependencies]
 pretty_assertions = "1.3"
