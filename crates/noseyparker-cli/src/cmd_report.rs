@@ -8,7 +8,10 @@ use tracing::info;
 
 use noseyparker::blob_metadata::BlobMetadata;
 use noseyparker::bstring_escape::Escaped;
-use noseyparker::datastore::{Datastore, FindingDataEntry, FindingMetadata, Status};
+use noseyparker::datastore::{Datastore, FindingDataEntry, FindingMetadata};
+use noseyparker::datastore::status::Status;
+
+
 use noseyparker::defaults::get_builtin_rules;
 use noseyparker::match_type::{Group, Groups, Match};
 use noseyparker::target::Target;
@@ -162,7 +165,7 @@ impl DetailsReporter {
     fn get_matches(&self, metadata: &FindingMetadata) -> Result<Vec<ReportMatch>> {
         Ok(self
             .datastore
-            .get_finding_data(metadata, self.max_matches)
+            .get_finding_data(metadata)
             .with_context(|| format!("Failed to get matches for finding {metadata:?}"))
             .expect("should be able to find get matches for finding")
             .into_iter()

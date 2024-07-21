@@ -6,7 +6,11 @@ use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, error_span, info, trace, warn};
-
+use polodb_core::bson::{doc, Bson, Document};
+use polodb_core::{Collection, Database};
+use noseyparker::location::Location;
+use noseyparker::snippet::Snippet;
+use noseyparker::match_type::Groups;
 use crate::{args, rule_loader::RuleLoader};
 
 use content_guesser::Guesser;
@@ -85,12 +89,20 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
     // ---------------------------------------------------------------------------------------------
     init_progress.set_message("Recording rules...");
     let mut record_rules = || -> Result<()> {
-        let tx = datastore.begin()?;
-        tx.record_rules(rules_db.rules())?;
-        tx.commit()?;
+        let collection: Collection<Document> = datastore.db.collection("rules");
+        for rule in rules_db.rules() {
+            let doc = doc! {
+                "name": rule.name(),
+                "id": rule.id(),
+                "pattern": rule.syntax().pattern.clone(),
+                "structural_id": rule.structural_id(),
+            };
+            collection.insert_one(doc)?;
+        }
         Ok(())
     };
     record_rules().context("Failed to record rules to the datastore")?;
+
 
     drop(init_progress);
 
@@ -345,8 +357,8 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
 
     let blobs_dir = datastore.blobs_dir();
 
-    // We create a separate thread for writing matches to the datastore.
-    // The datastore uses SQLite, which does best with a single writer.
+    
+    // Create a separate thread for writing matches to the datastore.
     let datastore_writer_thread = std::thread::Builder::new()
         .name("datastore".to_string())
         .spawn(move || -> Result<_> {
@@ -357,14 +369,11 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             let mut num_matches_added: u64 = 0;
             let mut total_messages: u64 = 0;
 
-            // Big idea: read until all the senders hang up; panic if recording matches fails.
-            //
-            // Record all messages chunked transactions, trying to commit at least every
-            // COMMIT_ITERVAL.
-
             let mut batch: Vec<DatastoreMessage> = Vec::with_capacity(BATCH_SIZE);
             let mut matches_in_batch: usize = 0;
             let mut last_commit_time = Instant::now();
+
+            let collection: Collection<Document> = datastore.db.collection("matches");
 
             for message in recv_ds {
                 total_messages += 1;
@@ -377,11 +386,8 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                 {
                     let t1 = std::time::Instant::now();
                     let batch_len = batch.len();
-                    let tx = datastore.begin()?;
-                    let num_added = tx
-                        .record(batch.as_slice())
+                    let num_added = record_batch(&collection, &batch)
                         .context("Failed to record batch")?;
-                    tx.commit()?;
                     last_commit_time = Instant::now();
                     num_matches_added += num_added;
                     batch.clear();
@@ -399,14 +405,9 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                 let t1 = std::time::Instant::now();
 
                 let batch_len = batch.len();
-                let tx = datastore.begin()?;
-                let num_added = tx
-                    .record(batch.as_slice())
+                let num_added = record_batch(&collection, &batch)
                     .context("Failed to record batch")?;
-                tx.commit()?;
                 num_matches_added += num_added;
-                // batch.clear();
-                // matches_in_batch = 0;
 
                 let elapsed = t1.elapsed();
                 trace!(
@@ -430,6 +431,113 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
 
             Ok((datastore, num_matches, num_matches_added))
         })?;
+
+        fn record_batch(collection: &Collection<Document>, batch: &[DatastoreMessage]) -> Result<u64> {
+            let mut num_added = 0;
+            for message in batch {
+                let (target, blob_metadata, matches) = message;
+                let target_doc = convert_target_to_document(target);
+                let blob_doc = convert_blob_metadata_to_document(blob_metadata);
+                
+                for (score, match_data) in matches {
+                    let match_doc = convert_match_to_document(match_data, score);
+                    let doc = doc! {
+                        "target": target_doc.clone(),
+                        "blob_metadata": blob_doc.clone(),
+                        "match": match_doc,
+                    };
+                    collection.insert_one(doc)?;
+                    num_added += 1;
+                }
+            }
+            Ok(num_added)
+        }
+
+
+        fn convert_target_to_document(target: &TargetSet) -> Document {
+            let mut targets = Vec::new();
+            
+            for t in target.iter() {
+                targets.push(convert_single_target_to_document(t));
+            }
+        
+            doc! {
+                "primary": convert_single_target_to_document(target.first()),
+                "additional": targets,
+            }
+        }
+
+        fn convert_single_target_to_document(target: &Target) -> Document {
+            match target {
+                Target::File(file_target) => doc! {
+                    "type": "file",
+                    "path": file_target.path.to_string_lossy().into_owned(),
+                },
+                Target::GitRepo(git_repo_target) => doc! {
+                    "type": "git_repo",
+                    "path": git_repo_target.repo_path.to_string_lossy().into_owned(),
+                },
+                // Handle other variants based on your actual Target enum
+                _ => doc! {
+                    "type": "unknown",
+                    "description": format!("{:?}", target),
+                },
+            }
+        }
+        
+        fn convert_blob_metadata_to_document(metadata: &BlobMetadata) -> Document {
+            doc! {
+                "id": metadata.id.to_string(),
+                "num_bytes": metadata.num_bytes as i64,
+                "mime_essence": metadata.mime_essence.clone(),
+                "charset": metadata.charset.clone(),
+            }
+        }
+        
+        fn convert_match_to_document(match_data: &Match, score: &Option<f64>) -> Document {
+            doc! {
+                "blob_id": match_data.blob_id.to_string(),
+                "location": convert_location_to_document(&match_data.location),
+                "snippet": convert_snippet_to_document(&match_data.snippet),
+                "groups": convert_groups_to_array(&match_data.groups),
+                "rule_structural_id": match_data.rule_structural_id.clone(),
+                "rule_name": match_data.rule_name.clone(),
+                "rule_text_id": match_data.rule_text_id.clone(),
+                "structural_id": match_data.structural_id.clone(),
+                "score": score.map(Bson::Double),
+            }
+        }
+        
+        fn convert_location_to_document(location: &Location) -> Document {
+            doc! {
+                "offset_span": doc! {
+                    "start": location.offset_span.start as i64,
+                    "end": location.offset_span.end as i64,
+                },
+                "source_span": doc! {
+                    "start": doc! {
+                        "line": location.source_span.start.line as i64,
+                        "column": location.source_span.start.column as i64,
+                    },
+                    "end": doc! {
+                        "line": location.source_span.end.line as i64,
+                        "column": location.source_span.end.column as i64,
+                    },
+                },
+            }
+        }
+        
+        fn convert_snippet_to_document(snippet: &Snippet) -> Document {
+            doc! {
+                "before": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.before.clone().into() }),
+                "matching": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.matching.clone().into() }),
+                "after": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.after.clone().into() }),
+            }
+        }   
+
+        fn convert_groups_to_array(groups: &Groups) -> Vec<Bson> {
+            groups.0.iter().map(|g| Bson::String(String::from_utf8_lossy(&g.0).into_owned())).collect()
+        }
 
     // A function to be immediately called, to allow syntactic simplification of error propagation
     let scan_inner = || -> Result<()> {
