@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::fmt;
+use std::str::FromStr;
 
 // -------------------------------------------------------------------------------------------------
 // Status
@@ -15,6 +17,27 @@ pub enum Status {
     Reject,
 }
 
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Status::Accept => write!(f, "accept"),
+            Status::Reject => write!(f, "reject"),
+        }
+    }
+}
+
+impl FromStr for Status {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "accept" => Ok(Status::Accept),
+            "reject" => Ok(Status::Reject),
+            _ => Err(()),
+        }
+    }
+}
+
 // -------------------------------------------------------------------------------------------------
 // Statuses
 // -------------------------------------------------------------------------------------------------
@@ -25,53 +48,67 @@ pub enum Status {
 pub struct Statuses(pub SmallVec<[Status; 16]>);
 
 // -------------------------------------------------------------------------------------------------
-// sql
+// bson
 // -------------------------------------------------------------------------------------------------
-mod sql {
+mod bson {
     use super::*;
+    use polodb_core::bson::{Bson, Document};
 
-    use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-    use rusqlite::Error::ToSqlConversionFailure;
-
-    impl ToSql for Status {
-        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-            match self {
-                Status::Accept => Ok("accept".into()),
-                Status::Reject => Ok("reject".into()),
+    impl From<Status> for Bson {
+        fn from(status: Status) -> Self {
+            match status {
+                Status::Accept => Bson::String("accept".to_string()),
+                Status::Reject => Bson::String("reject".to_string()),
             }
         }
     }
 
-    impl FromSql for Status {
-        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-            match value.as_str()? {
-                "accept" => Ok(Status::Accept),
-                "reject" => Ok(Status::Reject),
-                _ => Err(FromSqlError::InvalidType),
+    impl From<Bson> for Status {
+        fn from(bson: Bson) -> Self {
+            match bson.as_str().unwrap_or_default() {
+                "accept" => Status::Accept,
+                "reject" => Status::Reject,
+                _ => panic!("Invalid status"),
             }
         }
     }
 
-    impl ToSql for Statuses {
-        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-            match serde_json::to_string(self) {
-                Err(e) => Err(ToSqlConversionFailure(e.into())),
-                Ok(s) => Ok(s.into()),
-            }
+    impl From<Statuses> for Bson {
+        fn from(statuses: Statuses) -> Self {
+            let statuses_vec: Vec<Bson> = statuses.0.iter().cloned().map(Bson::from).collect();
+            Bson::Array(statuses_vec)
         }
     }
 
-    impl FromSql for Statuses {
-        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-            match value {
-                ValueRef::Text(s) => {
-                    serde_json::from_slice(s).map_err(|e| FromSqlError::Other(e.into()))
-                }
-                ValueRef::Blob(b) => {
-                    serde_json::from_slice(b).map_err(|e| FromSqlError::Other(e.into()))
-                }
-                _ => Err(FromSqlError::InvalidType),
-            }
+    impl From<Bson> for Statuses {
+        fn from(bson: Bson) -> Self {
+            let array = bson.as_array().expect("Expected array");
+            let statuses: SmallVec<[Status; 16]> = array.iter().cloned().map(Status::from).collect();
+            Statuses(statuses)
+        }
+    }
+
+    impl From<Statuses> for Document {
+        fn from(statuses: Statuses) -> Self {
+            let mut doc = Document::new();
+            doc.insert("statuses", Bson::from(statuses));
+            doc
+        }
+    }
+
+    impl From<Document> for Statuses {
+        fn from(doc: Document) -> Self {
+            let bson = doc.get("statuses").expect("Expected statuses field");
+            Statuses::from(bson.clone())
+        }
+    }
+
+    impl From<Vec<Bson>> for Statuses {
+        fn from(bson: Vec<Bson>) -> Self {
+            let statuses = bson.into_iter()
+                .map(|b| Status::from_str(b.as_str().expect("Expected string")).expect("Invalid status"))
+                .collect();
+            Statuses(statuses)
         }
     }
 }

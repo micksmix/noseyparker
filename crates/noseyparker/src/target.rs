@@ -4,6 +4,60 @@ use input_enumerator::git_commit_metadata::CommitMetadata;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use polodb_core::bson::{Bson, Document};
+use serde_json::Value;
+
+fn commit_metadata_to_bson(commit_metadata: CommitMetadata) -> Bson {
+    let json_value = serde_json::to_value(commit_metadata).expect("Serialization failed");
+    serde_json_to_bson(json_value)
+}
+
+fn serde_json_to_bson(value: Value) -> Bson {
+    match value {
+        Value::Null => Bson::Null,
+        Value::Bool(b) => Bson::Boolean(b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Bson::Int64(i)
+            } else if let Some(f) = n.as_f64() {
+                Bson::Double(f)
+            } else {
+                Bson::Null
+            }
+        }
+        Value::String(s) => Bson::String(s),
+        Value::Array(arr) => Bson::Array(arr.into_iter().map(serde_json_to_bson).collect()),
+        Value::Object(obj) => {
+            let mut doc = Document::new();
+            for (k, v) in obj {
+                doc.insert(k, serde_json_to_bson(v));
+            }
+            Bson::Document(doc)
+        }
+    }
+}
+fn bson_to_serde_json(bson: Bson) -> serde_json::Value {
+    match bson {
+        Bson::Null => serde_json::Value::Null,
+        Bson::Boolean(b) => serde_json::Value::Bool(b),
+        Bson::Int32(i) => serde_json::Value::Number(i.into()),
+        Bson::Int64(i) => serde_json::Value::Number(i.into()),
+        Bson::Double(f) => serde_json::Value::Number(serde_json::Number::from_f64(f).unwrap()),
+        Bson::String(s) => serde_json::Value::String(s),
+        Bson::Array(arr) => serde_json::Value::Array(arr.into_iter().map(bson_to_serde_json).collect()),
+        Bson::Document(doc) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in doc {
+                map.insert(k, bson_to_serde_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+        _ => panic!("Unexpected BSON type"),
+    }
+}
+
+
 
 // -------------------------------------------------------------------------------------------------
 // Target
@@ -94,6 +148,21 @@ impl std::fmt::Display for Target {
     }
 }
 
+impl FromStr for Target {
+    type Err = String; // You can define a more specific error type if needed.
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Define your parsing logic here. Adjust as necessary to fit your enum variants.
+        let parts: Vec<&str> = s.split(':').collect();
+        match parts[0] {
+            "file" => Ok(Target::from_file(PathBuf::from(parts.get(1).ok_or("Missing path")?))),
+            "git_repo" => Ok(Target::from_git_repo(PathBuf::from(parts.get(1).ok_or("Missing repo path")?))),
+            // Add parsing for `ExtendedTarget` if needed.
+            _ => Err(format!("Invalid target: {}", s)),
+        }
+    }
+}
+
 // -------------------------------------------------------------------------------------------------
 // FileTarget
 // -------------------------------------------------------------------------------------------------
@@ -161,27 +230,78 @@ impl ExtendedTarget {
 }
 
 // -------------------------------------------------------------------------------------------------
-// sql
+// bson
 // -------------------------------------------------------------------------------------------------
-mod sql {
+mod bson {
     use super::*;
+    use polodb_core::bson::{Bson, Document};
 
-    use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-    use rusqlite::Error::ToSqlConversionFailure;
-
-    impl ToSql for Target {
-        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-            match serde_json::to_string(self) {
-                Err(e) => Err(ToSqlConversionFailure(e.into())),
-                Ok(s) => Ok(s.into()),
+    impl From<Target> for Bson {
+        fn from(target: Target) -> Self {
+            Bson::Document(match target {
+                Target::File(ft) => {
+                    let mut doc = Document::new();
+                    doc.insert("kind", Bson::String("file".to_string()));
+                    doc.insert("path", Bson::String(ft.path.display().to_string()));
+                    doc
+                }
+                Target::GitRepo(grt) => {
+                    let mut doc = Document::new();
+                    doc.insert("kind", Bson::String("git_repo".to_string()));
+                    doc.insert("repo_path", Bson::String(grt.repo_path.display().to_string()));
+                    if let Some(fc) = grt.first_commit {
+                        let mut commit_doc = Document::new();
+                        commit_doc.insert("commit_metadata", commit_metadata_to_bson(fc.commit_metadata));
+                        commit_doc.insert("blob_path", Bson::String(fc.blob_path.to_string()));
+                        doc.insert("first_commit", Bson::Document(commit_doc));
+                    }
+                    doc
+                }
+                Target::Extended(et) => {
+                    let mut doc = Document::new();
+                    doc.insert("kind", Bson::String("extended".to_string()));
+                    doc.insert("value", serde_json_to_bson(et.0).as_document().cloned().unwrap());
+                    doc
+                }
+            })
+        }
+    }
+    
+    impl From<Bson> for Target {
+        fn from(bson: Bson) -> Self {
+            let doc = bson.as_document().expect("Expected document");
+            let kind = doc.get_str("kind").expect("Expected kind field");
+            match kind {
+                "file" => Target::File(FileTarget {
+                    path: PathBuf::from(doc.get_str("path").expect("Expected path field")),
+                }),
+                "git_repo" => Target::GitRepo(GitRepoTarget {
+                    repo_path: PathBuf::from(doc.get_str("repo_path").expect("Expected repo_path field")),
+                    first_commit: doc.get_document("first_commit").ok().map(|commit_doc| {
+                        let commit_metadata_bson = commit_doc.get("commit_metadata").unwrap().clone();
+                        let commit_metadata_json = bson_to_serde_json(commit_metadata_bson);
+                        CommitTarget {
+                            commit_metadata: serde_json::from_value(commit_metadata_json).expect("Deserialization failed"),
+                            blob_path: BString::from(commit_doc.get_str("blob_path").expect("Expected blob_path field").as_bytes()),
+                        }
+                    }),
+                }),
+                "extended" => Target::Extended(ExtendedTarget(Bson::Document(doc.clone()).into())),
+                _ => panic!("Unknown target kind"),
             }
         }
     }
+    
 
-    impl FromSql for Target {
-        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-            let s = value.as_str()?;
-            serde_json::from_str(s).map_err(|e| FromSqlError::Other(e.into()))
+    impl From<Target> for Document {
+        fn from(target: Target) -> Self {
+            Bson::from(target).as_document().cloned().unwrap()
+        }
+    }
+
+    impl From<Document> for Target {
+        fn from(doc: Document) -> Self {
+            Target::from(Bson::Document(doc))
         }
     }
 }

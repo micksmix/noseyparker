@@ -31,36 +31,51 @@ impl Group {
 pub struct Groups(pub SmallVec<[Group; 1]>);
 
 // -------------------------------------------------------------------------------------------------
-// sql
+// bson
 // -------------------------------------------------------------------------------------------------
-mod sql {
+mod bson {
     use super::*;
+    use polodb_core::bson::{Bson, Document};
 
-    use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-    use rusqlite::Error::ToSqlConversionFailure;
-
-    impl ToSql for Groups {
-        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-            match serde_json::to_string(self) {
-                Err(e) => Err(ToSqlConversionFailure(e.into())),
-                Ok(s) => Ok(s.into()),
-            }
+    impl From<Groups> for Bson {
+        fn from(groups: Groups) -> Self {
+            let groups_vec: Vec<Bson> = groups.0.iter().map(|g| Bson::String(g.0.to_string())).collect();
+            Bson::Array(groups_vec)
         }
     }
 
-    impl FromSql for Groups {
-        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-            match value {
-                ValueRef::Text(s) => {
-                    serde_json::from_slice(s).map_err(|e| FromSqlError::Other(e.into()))
-                }
-                ValueRef::Blob(b) => {
-                    serde_json::from_slice(b).map_err(|e| FromSqlError::Other(e.into()))
-                }
-                _ => Err(FromSqlError::InvalidType),
-            }
+    impl From<Bson> for Groups {
+        fn from(bson: Bson) -> Self {
+            let array = bson.as_array().expect("Expected array");
+            let groups: SmallVec<[Group; 1]> = array.iter().map(|b| Group(BString::from(b.as_str().expect("Expected string").as_bytes()))).collect();
+            Groups(groups)
         }
     }
+
+    impl From<Groups> for Document {
+        fn from(groups: Groups) -> Self {
+            let mut doc = Document::new();
+            doc.insert("groups", Bson::from(groups));
+            doc
+        }
+    }
+
+    impl From<Document> for Groups {
+        fn from(doc: Document) -> Self {
+            let bson = doc.get("groups").expect("Expected groups field");
+            Groups::from(bson.clone())
+        }
+    }
+
+    impl From<Vec<Bson>> for Groups {
+        fn from(bson: Vec<Bson>) -> Self {
+            let groups = bson.into_iter()
+                .map(|b| Group(BString::from(b.as_str().expect("Expected string").as_bytes())))
+                .collect();
+            Groups(groups)
+        }
+    }
+    
 }
 
 // -------------------------------------------------------------------------------------------------

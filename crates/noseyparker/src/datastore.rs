@@ -1,23 +1,20 @@
 use anyhow::{bail, Context, Result};
 use bstr::BString;
-use indoc::indoc;
-use noseyparker_rules::Rule;
-// use rusqlite::Connection;
-use polodb_core::bson::doc;
-use polodb_core::Database;
+use polodb_core::bson::{doc, Bson, Document};
+use polodb_core::{Collection, Database};
 use std::path::{Path, PathBuf};
-use tracing::{debug, debug_span, info, trace};
+use std::str::FromStr;
+use tracing::{debug, debug_span, info};
 
+use crate::blob_id::BlobId;
 use crate::blob_metadata::BlobMetadata;
 use crate::git_url::GitUrl;
 use crate::location::{Location, OffsetSpan, SourcePoint, SourceSpan};
-use crate::match_type::Match;
+use crate::match_type::{Groups, Match};
 use crate::target::Target;
 use crate::target_set::TargetSet;
 use crate::snippet::Snippet;
-
-const CURRENT_SCHEMA_VERSION: u64 = 60;
-const CURRENT_SCHEMA: &str = include_str!("datastore/schema_60.sql");
+use crate::datastore::status::{Status, Statuses};
 
 pub mod annotation;
 pub mod finding_data;
@@ -29,53 +26,16 @@ pub use annotation::{Annotations, FindingAnnotation, MatchAnnotation};
 pub use finding_data::{FindingData, FindingDataEntry};
 pub use finding_metadata::FindingMetadata;
 pub use finding_summary::{FindingSummary, FindingSummaryEntry};
-pub use status::{Status, Statuses};
 
-// -------------------------------------------------------------------------------------------------
-// Datastore
-// -------------------------------------------------------------------------------------------------
-
-/// The source of truth for Nosey Parker findings and runtime state.
-///
-/// A `Datastore` resides on disk as a directory, and stores a number of things:
-///
-/// - A sqlite database for recording findings and scan information
-/// - A scratch directory for providing temporary directories and files
-/// - A directory used for storing clones of Git repositories
-///
-/// Note that a `Datastore` is not `Sync`, and thus cannot be directly shared between threads.
-/// The recommended pattern in a case that requires concurrent access is to have a single thread
-/// that mediates access to the `Datastore`.
-///
-/// Accessing a single `Datastore` from multiple processes is untested and may not work correctly.
-/// This implementation has not built-in mechanism to check for or prevent multi-process access.
 pub struct Datastore {
-    /// The root directory of everything contained in this `Datastore`.
     root_dir: PathBuf,
-
-    /// A connection to the database backing this `Datastore`.
-    // conn: Connection,
     db: Database,
 }
 
-// Public implementation
 impl Datastore {
-    /// Create a new datastore at `root_dir` if one does not exist,
-    /// or open an existing one if present.
-    // pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
-    //     debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
-
-    //     Self::create(root_dir, cache_size).or_else(|e| {
-    //         debug!(
-    //             "Failed to create datastore: {e:#}: will try to open existing datastore instead"
-    //         );
-    //         Self::open(root_dir, cache_size)
-    //     })
-    // }
-
     pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
         debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
-    
+
         Self::create(root_dir, cache_size).or_else(|e| {
             debug!(
                 "Failed to create datastore: {e:#}: will try to open existing datastore instead"
@@ -83,711 +43,145 @@ impl Datastore {
             Self::open(root_dir, cache_size)
         })
     }
-    
 
-    // /// Open the existing datastore at `root_dir`.
-    // pub fn open(root_dir: &Path, cache_size: i64) -> Result<Self> {
-    //     debug!("Attempting to open existing datastore at {}", root_dir.display());
-
-    //     let ds = Self::open_impl(root_dir, cache_size)?;
-    //     ds.check_schema_version()?;
-
-    //     let scratch_dir = ds.scratch_dir();
-    //     std::fs::create_dir_all(&scratch_dir).with_context(|| {
-    //         format!("Failed to create scratch directory {}", scratch_dir.display(),)
-    //     })?;
-
-    //     let clones_dir = ds.clones_dir();
-    //     std::fs::create_dir_all(&clones_dir).with_context(|| {
-    //         format!("Failed to create clones directory {}", clones_dir.display(),)
-    //     })?;
-
-    //     let blobs_dir = ds.blobs_dir();
-    //     std::fs::create_dir_all(&blobs_dir).with_context(|| {
-    //         format!("Failed to create blobs directory {}", blobs_dir.display(),)
-    //     })?;
-
-    //     Ok(ds)
-    // }
-
-    // /// Create a new datastore at `root_dir` and open it.
-    // pub fn create(root_dir: &Path, cache_size: i64) -> Result<Self> {
-    //     debug!("Attempting to create new datastore at {}", root_dir.display());
-
-    //     // Create datastore directory
-    //     std::fs::create_dir(root_dir).with_context(|| {
-    //         format!("Failed to create datastore root directory at {}", root_dir.display())
-    //     })?;
-
-    //     // Generate .gitignore file
-    //     std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
-    //         format!("Failed to write .gitignore to datastore at {}", root_dir.display())
-    //     })?;
-
-    //     let mut ds = Self::open_impl(root_dir, cache_size)?;
-
-    //     ds.migrate_0_60()
-    //         .context("Failed to initialize database schema")?;
-
-    //     Self::open(root_dir, cache_size)
-    // }
     pub fn create(root_dir: &Path, _cache_size: i64) -> Result<Self> {
         debug!("Attempting to create new datastore at {}", root_dir.display());
-    
-        // Create datastore directory
+
         std::fs::create_dir_all(root_dir).with_context(|| {
             format!("Failed to create datastore root directory at {}", root_dir.display())
         })?;
-    
-        // Generate .gitignore file
+
         std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
             format!("Failed to write .gitignore to datastore at {}", root_dir.display())
         })?;
-    
+
         let db_path = root_dir.join("datastore.pdb");
-        let db = Database::open(&db_path)?;
-    
+        let db = Database::open_file(&db_path)?;
+
         Ok(Datastore { root_dir: root_dir.to_path_buf(), db })
     }
-    
+
     pub fn open(root_dir: &Path, _cache_size: i64) -> Result<Self> {
         debug!("Attempting to open existing datastore at {}", root_dir.display());
-    
+
         let db_path = root_dir.join("datastore.pdb");
-        let db = Database::open(&db_path)?;
-    
+        let db = Database::open_file(&db_path)?;
+
         Ok(Datastore { root_dir: root_dir.to_path_buf(), db })
     }
-    
-    /// Get the path to this datastore's scratch directory.
+
     pub fn scratch_dir(&self) -> PathBuf {
         self.root_dir.join("scratch")
     }
 
-    /// Get the path to this datastore's clones directory.
     pub fn clones_dir(&self) -> PathBuf {
         self.root_dir.join("clones")
     }
 
-    /// Get the path to this datastore's blobs directory.
     pub fn blobs_dir(&self) -> PathBuf {
         self.root_dir.join("blobs")
     }
 
-    /// Get the root directory that contains this `Datastore`.
     pub fn root_dir(&self) -> &Path {
         &self.root_dir
     }
 
-    /// Get a path for a local clone of the given git URL within this datastore's clones directory.
-    pub fn clone_destination(&self, repo: &GitUrl) -> Result<std::path::PathBuf> {
+    pub fn clone_destination(&self, repo: &GitUrl) -> Result<PathBuf> {
         clone_destination(&self.clones_dir(), repo)
     }
 
-    /// Analyze the datastore's sqlite database, potentially allowing for better query planning
-    // pub fn analyze(&self) -> Result<()> {
-    //     let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
-    //     self.conn.execute("analyze", [])?;
-    //     // self.conn.execute("pragma wal_checkpoint(truncate)", [])?;
-    //     Ok(())
-    // }
     pub fn analyze(&self) -> Result<()> {
         let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
-        // PoloDB does not have an equivalent analyze function, so this can be left empty or perform maintenance tasks if needed.
-        Ok(())
-    }
-    
-}
-
-/// A datastore-specific ID of a blob; simply a newtype-like wrapper around an i64.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct BlobIdInt(i64);
-
-/// A datastore-specific ID of a rule; simply a newtype-like wrapper around an i64.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct RuleIdInt(i64);
-
-/// A datastore-specific ID of a snippet; simply a newtype-like wrapper around an i64.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct SnippetIdInt(i64);
-
-/// A datastore-specific ID of a match; simply a newtype-like wrapper around an i64.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct MatchIdInt(i64);
-
-pub type BatchEntry = (TargetSet, BlobMetadata, Vec<(Option<f64>, Match)>);
-
-/// A datastore transaction.
-/// Its lifetime parameter is for the datastore it belongs to.
-pub struct Transaction<'ds> {
-    inner: rusqlite::Transaction<'ds>,
-}
-
-impl<'ds> Transaction<'ds> {
-    /// Commit this `Transaction`, consuming it.
-    pub fn commit(self) -> Result<()> {
-        self.inner.commit()?;
         Ok(())
     }
 
-    fn mk_record_rule(&'ds self) -> Result<impl FnMut(&'ds Rule) -> rusqlite::Result<RuleIdInt>> {
-        let mut get_id = self.inner.prepare_cached(indoc! {r#"
-            select id from rule
-            where structural_id = ? and name = ? and text_id = ? and syntax = ?
-        "#})?;
-
-        let mut set_id = self.inner.prepare_cached(indoc! {r#"
-            insert into rule(structural_id, name, text_id, syntax)
-            values (?, ?, ?, ?)
-            on conflict do update set syntax = excluded.syntax
-            where syntax != excluded.syntax
-            returning id
-        "#})?;
-
-        let f = move |r: &Rule| -> rusqlite::Result<RuleIdInt> {
-            let json_syntax = r.json_syntax();
-            let rule_id = add_if_missing_simple(
-                &mut get_id,
-                &mut set_id,
-                val_from_row,
-                (r.structural_id(), r.name(), r.id(), &json_syntax),
-            )?;
-            Ok(RuleIdInt(rule_id))
-        };
-
-        Ok(f)
-    }
-
-    /// Record the given rules to the datastore.
-    pub fn record_rules(&self, rules: &[Rule]) -> Result<()> {
-        let mut record_rule = self.mk_record_rule()?;
-        for rule in rules {
-            record_rule(rule)?;
-        }
-        Ok(())
-    }
-
-    /// Return a closure that records a blob's metadata (only if necessary), returning its integer ID
-    fn mk_record_blob_metadata(
-        &'ds self,
-    ) -> Result<impl FnMut(&'ds BlobMetadata) -> rusqlite::Result<BlobIdInt>> {
-        let mut get_id = self.inner.prepare_cached(indoc! {r#"
-            select id from blob where blob_id = ? and size = ?
-        "#})?;
-
-        let mut set_id = self.inner.prepare_cached(indoc! {r#"
-            insert into blob(blob_id, size)
-            values (?, ?)
-            returning id
-        "#})?;
-
-        let mut set_mime_essence = self.inner.prepare_cached(indoc! {r#"
-            insert or ignore into blob_mime_essence(blob_id, mime_essence)
-            values (?, ?)
-        "#})?;
-
-        let mut set_charset = self.inner.prepare_cached(indoc! {r#"
-            insert or ignore into blob_charset(blob_id, charset)
-            values (?, ?)
-        "#})?;
-
-        let f = move |b: &BlobMetadata| -> rusqlite::Result<BlobIdInt> {
-            let blob_id = add_if_missing_simple(
-                &mut get_id,
-                &mut set_id,
-                val_from_row,
-                (&b.id, b.num_bytes),
-            )?;
-
-            if let Some(mime_essence) = b.mime_essence() {
-                set_mime_essence.execute((blob_id, mime_essence))?;
-            }
-
-            if let Some(charset) = b.charset() {
-                set_charset.execute((blob_id, charset))?;
-            }
-
-            Ok(BlobIdInt(blob_id))
-        };
-
-        Ok(f)
-    }
-
-    /// Record target metadata for a blob given its integer ID
-    fn mk_record_target(
-        &'ds self,
-    ) -> Result<impl FnMut(BlobIdInt, &'ds Target) -> rusqlite::Result<()>> {
-        let mut add_target = self.inner.prepare_cached(indoc! {r#"
-            insert into blob_target(blob_id, target)
-            values (?, ?)
-            on conflict do nothing
-        "#})?;
-
-        let f = move |BlobIdInt(blob_id), target| -> rusqlite::Result<()> {
-            add_target.execute((blob_id, target))?;
-            Ok(())
-        };
-
-        Ok(f)
-    }
-
-    /// Record a contextual snippet, returning an integer ID for it
-    fn mk_record_snippet(
-        &'ds self,
-    ) -> Result<impl FnMut(&'ds [u8]) -> rusqlite::Result<SnippetIdInt>> {
-        let mut get = self.inner.prepare_cached(indoc! {r#"
-            select id from snippet where snippet = ?
-        "#})?;
-
-        let mut set = self.inner.prepare_cached(indoc! {r#"
-            insert into snippet(snippet)
-            values (?)
-            returning id
-        "#})?;
-
-        Ok(move |blob| {
-            let id = add_if_missing_simple(&mut get, &mut set, val_from_row, (blob,))?;
-            Ok(SnippetIdInt(id))
-        })
-    }
-
-    /// Record a match, returning whether it was new or not
-    fn mk_record_match(
-        &'ds self,
-    ) -> Result<impl FnMut(BlobIdInt, &'ds Match, &'ds Option<f64>) -> rusqlite::Result<bool>> {
-        let mut record_snippet = self.mk_record_snippet()?;
-
-        let mut get_finding_id = self.inner.prepare_cached(indoc! {r#"
-            select f.id
-            from finding f
-            where f.finding_id = ?
-        "#})?;
-
-        let mut set_finding_id = self.inner.prepare_cached(indoc! {r#"
-            insert into finding (finding_id, rule_id, groups)
-            select ?1, r.id, ?3
-            from rule r
-            where r.structural_id = ?2
-            returning id
-        "#})?;
-
-        let mut get_match_id = self.inner.prepare_cached(indoc! {r#"
-            select m.id
-            from
-                match m
-            where
-                m.blob_id = ?
-                and m.start_byte = ?
-                and m.end_byte = ?
-                and m.finding_id = ?
-        "#})?;
-
-        let mut update_match = self.inner.prepare_cached(indoc! {r#"
-            update match
-            set
-                structural_id = ?2,
-                finding_id = ?3,
-                before_snippet_id = ?4,
-                matching_snippet_id = ?5,
-                after_snippet_id = ?6
-            where
-                id = ?1 and
-                (
-                    structural_id != ?2 or
-                    finding_id != ?3 or
-                    before_snippet_id != ?4 or
-                    matching_snippet_id != ?5 or
-                    after_snippet_id != ?6
-                )
-        "#})?;
-
-        let mut add_match = self.inner.prepare_cached(indoc! {r#"
-            insert into match (
-                structural_id,
-                finding_id,
-                blob_id,
-                start_byte,
-                end_byte,
-                before_snippet_id,
-                matching_snippet_id,
-                after_snippet_id
-            )
-            select ?, ?, ?, ?, ?, ?, ?, ?
-            returning id
-        "#})?;
-
-        let mut add_blob_source_span = self.inner.prepare_cached(indoc! {r#"
-            insert into blob_source_span (blob_id, start_byte, end_byte, start_line, start_column, end_line, end_column)
-            values (?, ?, ?, ?, ?, ?, ?)
-            on conflict do update set
-                start_line = excluded.start_line,
-                start_column = excluded.start_column,
-                end_line = excluded.end_line,
-                end_column = excluded.end_column
-            where
-                start_line != excluded.start_line
-                or start_column != excluded.start_column
-                or end_line != excluded.end_line
-                or end_column != excluded.end_column
-        "#})?;
-
-        let mut set_score = self.inner.prepare_cached(indoc! {r#"
-            insert into match_score (match_id, score)
-            values (?, ?)
-            on conflict do update set score = excluded.score
-        "#})?;
-
-        let f = move |BlobIdInt(blob_id), m: &'ds Match, score: &'ds Option<f64>| {
-            let start_byte = m.location.offset_span.start;
-            let end_byte = m.location.offset_span.end;
-            let rule_structural_id = &m.rule_structural_id;
-            let structural_id = &m.structural_id;
-            let finding_id = &m.finding_id();
-            let groups = &m.groups;
-            let source_span = &m.location.source_span;
-
-            add_blob_source_span.execute((
-                blob_id,
-                start_byte,
-                end_byte,
-                source_span.start.line,
-                source_span.start.column,
-                source_span.end.line,
-                source_span.end.column,
-            ))?;
-
-            let finding_id: i64 = {
-                match get_finding_id
-                    .query_map((finding_id,), val_from_row)?
-                    .next()
-                {
-                    Some(finding_id) => finding_id?,
-                    None => set_finding_id
-                        .query_row((finding_id, rule_structural_id, groups), val_from_row)?,
-                }
-            };
-
-            let snippet = &m.snippet;
-            let SnippetIdInt(before_snippet_id) = record_snippet(snippet.before.as_slice())?;
-            let SnippetIdInt(matching_snippet_id) = record_snippet(snippet.matching.as_slice())?;
-            let SnippetIdInt(after_snippet_id) = record_snippet(snippet.after.as_slice())?;
-
-            let (match_id, new) = if let Some(match_id) = get_match_id
-                .query_map((blob_id, start_byte, end_byte, finding_id), val_from_row)?
-                .next()
-            {
-                let match_id: i64 = match_id?;
-                // existing match; update if needed
-                update_match.execute((
-                    match_id,
-                    structural_id,
-                    finding_id,
-                    before_snippet_id,
-                    matching_snippet_id,
-                    after_snippet_id,
-                ))?;
-                (match_id, false)
-            } else {
-                // totally new match
-                let match_id = add_match.query_row(
-                    (
-                        structural_id,
-                        finding_id,
-                        blob_id,
-                        start_byte,
-                        end_byte,
-                        before_snippet_id,
-                        matching_snippet_id,
-                        after_snippet_id,
-                    ),
-                    val_from_row,
-                )?;
-                (match_id, true)
-            };
-
-            if let Some(score) = score {
-                set_score.execute((match_id, score))?;
-            }
-
-            Ok(new)
-        };
-
-        Ok(f)
-    }
-
-//     /// Record the given data into the datastore.
-//     /// Returns the number of matches that were newly added.
-//     pub fn record(&self, batch: &[BatchEntry]) -> Result<u64> {
-//         let mut record_blob_metadata = self.mk_record_blob_metadata()?;
-//         let mut record_target = self.mk_record_target()?;
-//         let mut record_match = self.mk_record_match()?;
-
-//         let mut num_matches_added = 0;
-
-//         for (ps, md, ms) in batch {
-//             // record blob metadata
-//             let blob_id = record_blob_metadata(md).context("Failed to add blob metadata")?;
-
-//             // // record target metadata
-//             for p in ps.iter() {
-//                 record_target(blob_id, p).context("Failed to record blob target")?;
-//             }
-
-//             // record matches
-//             for (s, m) in ms {
-//                 if record_match(blob_id, m, s).context("Failed to record match")? {
-//                     num_matches_added += 1;
-//                 }
-//             }
-//         }
-
-//         Ok(num_matches_added)
-//     }
-}
-
-pub fn record(&self, batch: &[BatchEntry]) -> Result<u64> {
-    let collection = self.db.collection("matches")?;
-    let mut num_matches_added = 0;
-
-    for (ps, md, ms) in batch {
-        let blob_doc = doc! {
-            "blob_id": md.id,
-            "num_bytes": md.num_bytes,
-            "mime_essence": md.mime_essence.clone(),
-            "charset": md.charset.clone(),
-        };
-        collection.insert_one(blob_doc, None)?;
-
-        for (score, m) in ms {
-            let match_doc = doc! {
-                "blob_id": md.id,
-                "start_byte": m.location.offset_span.start,
-                "end_byte": m.location.offset_span.end,
-                "groups": m.groups.clone(),
-                "rule_structural_id": m.rule_structural_id.clone(),
-                "rule_name": m.rule_name.clone(),
-                "rule_text_id": m.rule_text_id.clone(),
-                "snippet_before": m.snippet.before.clone(),
-                "snippet_matching": m.snippet.matching.clone(),
-                "snippet_after": m.snippet.after.clone(),
-                "score": score.clone(),
-            };
-            collection.insert_one(match_doc, None)?;
-            num_matches_added += 1;
-        }
-    }
-
-    Ok(num_matches_added)
-}
-
-impl Datastore {
-    /// Begin a new transaction.
-    // pub fn begin(&mut self) -> Result<Transaction> {
-    //     let inner = self
-    //         .conn
-    //         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    //     Ok(Transaction { inner })
-    // }
     pub fn begin(&self) -> Result<()> {
         let _span = debug_span!("Datastore::begin", "{}", self.root_dir.display()).entered();
-        // PoloDB doesn't have explicit transactions, so this can be left empty or manage atomic operations if needed.
         Ok(())
     }
 
-    
-    // /// How many matches are there, total, in the datastore?
-    // pub fn get_num_matches(&self) -> Result<u64> {
-    //     let mut stmt = self.conn.prepare_cached(indoc! {r#"
-    //         select count(*) from match
-    //     "#})?;
-    //     let num_matches: u64 = stmt.query_row((), val_from_row)?;
-    //     Ok(num_matches)
-    // }
-
-    // /// How many findings are there, total, in the datastore?
-    // pub fn get_num_findings(&self) -> Result<u64> {
-    //     let mut stmt = self.conn.prepare_cached(indoc! {r#"
-    //         select count(*) from finding
-    //     "#})?;
-    //     let num_findings: u64 = stmt.query_row((), val_from_row)?;
-    //     Ok(num_findings)
-    // }
-
-    // /// Get a summary of all recorded findings.
-    // pub fn get_summary(&self) -> Result<FindingSummary> {
-    //     let _span = debug_span!("Datastore::get_summary", "{}", self.root_dir.display()).entered();
-
-    //     // XXX this should be moved into a view in the datastore (probably should replace
-    //     // `finding_summary`), but it is inlined here instead to avoid a schema migration for now
-    //     let mut stmt = self.conn.prepare_cached(indoc! {r#"
-    //         with
-    //             -- table of relevant per-match information
-    //             m as (
-    //                 select
-    //                     f.finding_id finding_id,
-    //                     r.name rule_name,
-    //                     r.structural_id rule_structural_id,
-    //                     ms.status match_status
-    //                 from
-    //                     finding f
-    //                     inner join match m on (m.finding_id = f.id)
-    //                     inner join rule r on (f.rule_id = r.id)
-    //                     left outer join match_status ms on (m.id = ms.match_id)
-    //             ),
-    //             -- summarize per-match information by finding
-    //             f as (
-    //                 select
-    //                     finding_id,
-    //                     rule_name,
-    //                     rule_structural_id,
-    //                     case group_concat(distinct match_status)
-    //                         when 'accept' then 'accept'
-    //                         when 'reject' then 'reject'
-    //                         when 'accept,reject' then 'mixed'
-    //                         when 'reject,accept' then 'mixed'
-    //                     end finding_status,
-    //                     count(*) num_matches,
-    //                     sum(case when match_status = 'accept' then 1 else 0 end) num_accept_matches,
-    //                     sum(case when match_status = 'reject' then 1 else 0 end) num_reject_matches,
-    //                     sum(case when match_status is null then 1 else 0 end) num_unlabeled_matches
-    //                 from m
-    //                 group by finding_id
-    //             )
-    //         select
-    //             rule_name,
-    //             -- rule_structural_id,
-    //             count(distinct finding_id) total_findings,
-    //             sum(num_matches) total_matches,
-    //             sum(case when finding_status = 'accept' then 1 else 0 end) accept_findings,
-    //             sum(case when finding_status = 'reject' then 1 else 0 end) reject_findings,
-    //             sum(case when finding_status = 'mixed' then 1 else 0 end) mixed_findings,
-    //             sum(case when finding_status is null then 1 else 0 end) unlabeled_findings
-    //             -- ,
-    //             -- sum(num_accept_matches) accept_matches,
-    //             -- sum(num_reject_matches) reject_matches,
-    //             -- sum(num_unlabeled_matches) unlabeled_matches
-    //         from
-    //             f
-    //         group by rule_name, rule_structural_id
-    //     "#})?;
-    //     let entries = stmt.query_map((), |row| {
-    //         Ok(FindingSummaryEntry {
-    //             rule_name: row.get(0)?,
-    //             distinct_count: row.get(1)?,
-    //             total_count: row.get(2)?,
-    //             accept_count: row.get(3)?,
-    //             reject_count: row.get(4)?,
-    //             mixed_count: row.get(5)?,
-    //             unlabeled_count: row.get(6)?,
-    //         })
-    //     })?;
-    //     let es = collect(entries)?;
-    //     Ok(FindingSummary(es))
-    // }
-
     pub fn get_num_matches(&self) -> Result<u64> {
-        let collection = self.db.collection("matches")?;
-        let count = collection.count_documents(doc! {}, None)?;
-        Ok(count as u64)
+        let collection: Collection<Document> = self.db.collection("matches");
+        let count = collection.count_documents()?;
+        Ok(count)
     }
-    
+
     pub fn get_num_findings(&self) -> Result<u64> {
-        let collection = self.db.collection("findings")?;
-        let count = collection.count_documents(doc! {}, None)?;
-        Ok(count as u64)
+        let collection: Collection<Document> = self.db.collection("findings");
+        let count = collection.count_documents()?;
+        Ok(count)
     }
-    
+
     pub fn get_summary(&self) -> Result<FindingSummary> {
         let _span = debug_span!("Datastore::get_summary", "{}", self.root_dir.display()).entered();
-        let collection = self.db.collection("findings")?;
-        
-        let cursor = collection.find(doc! {}, None)?;
+        let collection: Collection<Document> = self.db.collection("findings");
+
+        let cursor = collection.find(doc! {})?;
         let mut entries = vec![];
-    
+
         for result in cursor {
             let doc = result?;
             let entry = FindingSummaryEntry {
                 rule_name: doc.get_str("rule_name")?.to_string(),
-                distinct_count: doc.get_i32("distinct_count")? as u64,
-                total_count: doc.get_i32("total_count")? as u64,
-                accept_count: doc.get_i32("accept_count")? as u64,
-                reject_count: doc.get_i32("reject_count")? as u64,
-                mixed_count: doc.get_i32("mixed_count")? as u64,
-                unlabeled_count: doc.get_i32("unlabeled_count")? as u64,
+                distinct_count: doc.get_i64("distinct_count")? as usize,
+                total_count: doc.get_i64("total_count")? as usize,
+                accept_count: doc.get_i64("accept_count")? as usize,
+                reject_count: doc.get_i64("reject_count")? as usize,
+                mixed_count: doc.get_i64("mixed_count")? as usize,
+                unlabeled_count: doc.get_i64("unlabeled_count")? as usize,
             };
             entries.push(entry);
         }
-    
+
         Ok(FindingSummary(entries))
     }
-    
-    /// Get annotations from this datastore.
+
     pub fn get_annotations(&self) -> Result<Annotations> {
-        let _span =
-            debug_span!("Datastore::get_annotations", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_annotations", "{}", self.root_dir.display()).entered();
 
-        let mut stmt = self.conn.prepare_cached(indoc! {r#"
-            select
-                md.finding_id,
-                md.rule_name,
-                md.rule_text_id,
-                md.rule_structural_id,
-                md.structural_id,
-                md.blob_id,
-                md.start_byte,
-                md.end_byte,
-                md.groups,
-                md.status,
-                md.comment
-            from match_denorm md
-            where md.status is not null or md.comment is not null
-        "#})?;
-        let entries = stmt.query_map((), |row| {
-            Ok(MatchAnnotation {
-                finding_id: row.get(0)?,
-                rule_name: row.get(1)?,
-                rule_text_id: row.get(2)?,
-                rule_structural_id: row.get(3)?,
-                match_id: row.get(4)?,
-                blob_id: row.get(5)?,
-                start_byte: row.get(6)?,
-                end_byte: row.get(7)?,
-                groups: row.get(8)?,
-                status: row.get(9)?,
-                comment: row.get(10)?,
-            })
-        })?;
-        let match_annotations = collect(entries)?;
+        let collection: Collection<Document> = self.db.collection("annotations");
+        let cursor = collection.find(doc! {})?;
+        let mut match_annotations = vec![];
+        let mut finding_annotations = vec![];
 
-        let mut stmt = self.conn.prepare_cached(indoc! {r#"
-            select
-                md.finding_id,
-                md.rule_name,
-                md.rule_text_id,
-                md.rule_structural_id,
-                md.groups,
-                md.comment
-            from finding_denorm md
-            where md.comment is not null
-        "#})?;
-        let entries = stmt.query_map((), |row| {
-            Ok(FindingAnnotation {
-                finding_id: row.get(0)?,
-                rule_name: row.get(1)?,
-                rule_text_id: row.get(2)?,
-                rule_structural_id: row.get(3)?,
-                groups: row.get(4)?,
-                comment: row.get(5)?,
-            })
-        })?;
-        let finding_annotations = collect(entries)?;
+        for result in cursor {
+            let doc = result?;
+            if let Some(comment) = doc.get_str("comment").ok() {
+                if doc.contains_key("structural_id") {
+                    match_annotations.push(MatchAnnotation {
+                        finding_id: doc.get_str("finding_id")?.to_string(),
+                        rule_name: doc.get_str("rule_name")?.to_string(),
+                        rule_text_id: doc.get_str("rule_text_id")?.to_string(),
+                        rule_structural_id: doc.get_str("rule_structural_id")?.to_string(),
+                        match_id: doc.get_str("structural_id")?.to_string(),
+                        blob_id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
+                        start_byte: doc.get_i64("start_byte")? as usize,
+                        end_byte: doc.get_i64("end_byte")? as usize,
+                        groups: Groups::from(doc.get_array("groups")?.clone()),
+                        status: match doc.get_str("status") {
+                            Ok(s) => Some(Status::from_str(s).expect("Invalid status")),
+                            Err(_) => None,
+                        },
+                        comment: Some(comment.to_string()),
+                    });
+                } else {
+                    finding_annotations.push(FindingAnnotation {
+                        finding_id: doc.get_str("finding_id")?.to_string(),
+                        rule_name: doc.get_str("rule_name")?.to_string(),
+                        rule_text_id: doc.get_str("rule_text_id")?.to_string(),
+                        rule_structural_id: doc.get_str("rule_structural_id")?.to_string(),
+                        groups: Groups::from(doc.get_array("groups")?.clone()),
+                        comment: comment.to_string(),
+                    });
+                }
+            }
+        }
 
         Ok(Annotations {
             match_annotations,
             finding_annotations,
         })
     }
-
     pub fn import_annotations(&mut self, annotations: &Annotations) -> Result<()> {
         #[derive(Default, Debug)]
         struct Stats {
@@ -796,7 +190,7 @@ impl Datastore {
             n_existing: usize,
             n_missing: usize,
         }
-
+    
         impl std::fmt::Display for Stats {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(
@@ -806,502 +200,215 @@ impl Datastore {
                 )
             }
         }
-
-        use rusqlite::{types::FromSql, CachedStatement, ToSql};
-
-        /// This complicated helper function factors out some common "import a single annotation"
-        /// logic that is common to finding comments, match comments, and match statuses.
-        /// Better than repeating the code verbatim three times...?
-        fn do_import<Ann, Id, Val>(
-            annotation_type: &str,        // human-readable name of annotation type
-            stats: &mut Stats,            // stats object to update
-            getter: &mut CachedStatement, // sql getter query, takes a single `&Id` parameter
-            setter: &mut CachedStatement, // sql setter query, takes an `&Id` and a `&Val` parameter
-            ann: &Ann,                    // the annotation being imported
-            ann_id: &Id,                  // the id from the annotation
-            ann_val: &Val,                // the value from the annotation (comment, status, etc)
-        ) -> Result<()>
-        where
-            Ann: std::fmt::Debug,
-            Id: ToSql,
-            Val: FromSql + ToSql + Eq + std::fmt::Debug,
-        {
-            use rusqlite::OptionalExtension; // for .optional()
-
-            let existing: Option<(u64, Val)> = getter
-                .query_row((ann_id,), |r| {
-                    let id: u64 = r.get(0)?;
-                    let val: Val = r.get(1)?;
-                    Ok((id, val))
-                })
-                .optional()?;
-            match existing {
-                Some((_id, val)) if &val == ann_val => {
-                    stats.n_existing += 1;
-                    trace!("did not import {annotation_type}: already present: {ann:#?}");
-                }
-                Some((_id, val)) => {
-                    stats.n_conflicting += 1;
-                    debug!("did not import {annotation_type}: conflict: {val:?} {ann:#?}");
-                }
-                None => {
-                    let n_set = setter.execute((ann_id, ann_val))?;
-                    if n_set == 1 {
-                        stats.n_imported += 1;
-                        trace!("imported {annotation_type}: new: {ann:#?}");
-                    } else {
-                        assert_eq!(n_set, 0);
-                        stats.n_missing += 1;
-                        debug!("did not import {annotation_type}: not found: {ann:#?}");
-                    }
-                }
-            }
-
-            Ok(())
-        }
-
-        // Ok, now with that preamble out of the way, let's actually import the annotations
-
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
+    
+        let collection: Collection<Document> = self.db.collection("annotations");
         let mut finding_comment_stats = Stats::default();
         let mut match_comment_stats = Stats::default();
         let mut match_status_stats = Stats::default();
-
-        // Import finding comments
-        {
-            let mut getter = tx.prepare_cached(indoc! {r#"
-                select f.id, fc.comment
-                from
-                    finding f
-                    inner join finding_comment fc on (fc.finding_id = f.id)
-                where f.finding_id = ?
-            "#})?;
-
-            let mut setter = tx.prepare_cached(indoc! {r#"
-                insert or replace into finding_comment (finding_id, comment)
-                select f.id, ?2
-                from finding f
-                where f.finding_id = ?1
-            "#})?;
-
-            for fa in annotations.finding_annotations.iter() {
-                do_import(
-                    "finding comment",
-                    &mut finding_comment_stats,
-                    &mut getter,
-                    &mut setter,
-                    &fa,
-                    &fa.finding_id,
-                    &fa.comment,
-                )?;
+    
+        for fa in annotations.finding_annotations.iter() {
+            let existing = collection.find_one(doc! { "finding_id": fa.finding_id.clone() })?;
+            match existing {
+                Some(doc) => {
+                    if doc.get_str("comment")? == fa.comment.as_str(){//}.unwrap_or("") {
+                        finding_comment_stats.n_existing += 1;
+                    } else {
+                        finding_comment_stats.n_conflicting += 1;
+                    }
+                }
+                None => {
+                    collection.insert_one(doc! {
+                        "finding_id": fa.finding_id.clone(),
+                        "rule_name": &fa.rule_name,
+                        "rule_text_id": &fa.rule_text_id,
+                        "rule_structural_id": fa.rule_structural_id.clone(),
+                        "groups": Bson::from(fa.groups.clone()),
+                        "comment": fa.comment.as_str()//.unwrap_or("")
+                    })?;
+                    finding_comment_stats.n_imported += 1;
+                }
             }
         }
-
-        // Import match comments
-        {
-            let mut getter = tx.prepare_cached(indoc! {r#"
-                select m.id, mc.comment
-                from
-                    match m
-                    inner join match_comment mc on (mc.match_id = m.id)
-                where m.structural_id = ?
-            "#})?;
-
-            let mut setter = tx.prepare_cached(indoc! {r#"
-                insert or replace into match_comment (match_id, comment)
-                select m.id, ?2
-                from match m
-                where m.structural_id = ?1
-            "#})?;
-
-            for ma in annotations.match_annotations.iter() {
-                let ma_comment = match &ma.comment {
-                    Some(comment) => comment,
-                    None => continue,
-                };
-
-                do_import(
-                    "match comment",
-                    &mut match_comment_stats,
-                    &mut getter,
-                    &mut setter,
-                    &ma,
-                    &ma.match_id,
-                    ma_comment,
-                )?;
+    
+        for ma in annotations.match_annotations.iter() {
+            let existing = collection.find_one(doc! { "match_id": ma.match_id.clone() })?;
+            match existing {
+                Some(doc) => {
+                    if doc.get_str("comment")? == ma.comment.as_deref().unwrap_or("") {
+                        match_comment_stats.n_existing += 1;
+                    } else {
+                        match_comment_stats.n_conflicting += 1;
+                    }
+                }
+                None => {
+                    collection.insert_one(doc! {
+                        "finding_id": ma.finding_id.clone(),
+                        "rule_name": &ma.rule_name,
+                        "rule_text_id": &ma.rule_text_id,
+                        "rule_structural_id": ma.rule_structural_id.clone(),
+                        "match_id": ma.match_id.clone(),
+                        "blob_id": Bson::from(ma.blob_id.clone()),
+                        "start_byte": ma.start_byte as i64,
+                        "end_byte": ma.end_byte as i64,
+                        "groups": Bson::from(ma.groups.clone()),
+                        "status": ma.status.as_ref().map(|s| s.to_string()),
+                        "comment": ma.comment.as_deref().unwrap_or("")
+                    })?;
+                    match_comment_stats.n_imported += 1;
+                }
             }
         }
-
-        // Import match statuses
-        {
-            let mut getter = tx.prepare_cached(indoc! {r#"
-                select m.id, ms.status
-                from
-                    match m
-                    inner join match_status ms on (ms.match_id = m.id)
-                where m.structural_id = ?
-            "#})?;
-
-            let mut setter = tx.prepare_cached(indoc! {r#"
-                insert or replace into match_status (match_id, status)
-                select m.id, ?2
-                from match m
-                where m.structural_id = ?1
-            "#})?;
-
-            for ma in annotations.match_annotations.iter() {
-                let ma_status = match ma.status {
-                    Some(status) => status,
-                    None => continue,
-                };
-
-                do_import(
-                    "match status",
-                    &mut match_status_stats,
-                    &mut getter,
-                    &mut setter,
-                    &ma,
-                    &ma.match_id,
-                    &ma_status,
-                )?;
-            }
-        }
-
-        tx.commit()?;
-
+    
         info!(
             "{} findings and {} matches in datastore at {}",
             self.get_num_findings()?,
             self.get_num_matches()?,
             self.root_dir.display()
         );
-        info!("Finding comment annotations: {finding_comment_stats}");
-        info!("Match comment annotations: {match_comment_stats}");
-        info!("Match status annotations: {match_status_stats}");
-
+        info!("Finding comment annotations: {}", finding_comment_stats);
+        info!("Match comment annotations: {}", match_comment_stats);
+    
         Ok(())
     }
+    
 
-    /// Get metadata for all groups of identical matches recorded within this datastore.
     pub fn get_finding_metadata(&self) -> Result<Vec<FindingMetadata>> {
-        let _span =
-            debug_span!("Datastore::get_finding_metadata", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_finding_metadata", "{}", self.root_dir.display()).entered();
 
-        let mut stmt = self.conn.prepare_cached(indoc! {r#"
-            select
-                finding_id,
-                groups,
-                rule_structural_id,
-                rule_text_id,
-                rule_name,
-                num_matches,
-                comment,
-                match_statuses,
-                mean_score
-            from finding_denorm
-            order by rule_name, rule_structural_id, mean_score desc, groups
-        "#})?;
-        let entries = stmt.query_map((), |row| {
-            Ok(FindingMetadata {
-                finding_id: row.get(0)?,
-                groups: row.get(1)?,
-                rule_structural_id: row.get(2)?,
-                rule_text_id: row.get(3)?,
-                rule_name: row.get(4)?,
-                num_matches: row.get(5)?,
-                comment: row.get(6)?,
-                statuses: row.get(7)?,
-                mean_score: row.get(8)?,
-            })
-        })?;
-        collect(entries)
+        let collection: Collection<Document> = self.db.collection("findings");
+        let cursor = collection.find(doc! {})?;
+        let mut entries = vec![];
+
+        for result in cursor {
+            let doc = result?;
+            let entry = FindingMetadata {
+                finding_id: doc.get_str("finding_id")?.to_string(),
+                groups: Groups::from(doc.get_array("groups")?.clone()),
+                rule_structural_id: doc.get_str("rule_structural_id")?.to_string(),
+                rule_text_id: doc.get_str("rule_text_id")?.to_string(),
+                rule_name: doc.get_str("rule_name")?.to_string(),
+                num_matches: doc.get_i64("num_matches")? as usize,
+                comment: doc.get_str("comment").map(|s| s.to_string()).ok(),
+                statuses: Statuses::from(doc.get_array("statuses")?.clone()),
+                mean_score: doc.get_f64("mean_score").ok(),
+            };
+            entries.push(entry);
+        }
+
+        Ok(entries)
     }
 
-    /// Get up to `limit` matches that belong to the finding with the given finding metadata.
-    ///
-    /// A value of `None` means "no limit".
     pub fn get_finding_data(
         &self,
         metadata: &FindingMetadata,
         limit: Option<usize>,
     ) -> Result<FindingData> {
-        let _span =
-            debug_span!("Datastore::get_finding_data", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_finding_data", "{}", self.root_dir.display()).entered();
 
-        let match_limit: i64 = match limit {
-            Some(limit) => limit.try_into().expect("limit should be convertible"),
-            None => -1,
-        };
+        let collection: Collection<Document> = self.db.collection("matches");
+        let cursor = collection.find(doc! {
+            "groups": Bson::from(metadata.groups.clone()),
+            "rule_structural_id": metadata.rule_structural_id
+        })?;
 
-        let mut get_blob_metadata_and_match = self.conn.prepare_cached(indoc! {r#"
-            select
-                m.blob_id,
-                m.start_byte,
-                m.end_byte,
-                m.start_line,
-                m.start_column,
-                m.end_line,
-                m.end_column,
-
-                m.before_snippet,
-                m.matching_snippet,
-                m.after_snippet,
-
-                m.groups,
-
-                b.size,
-                b.mime_essence,
-                b.charset,
-
-                m.id,
-                m.score,
-                m.comment,
-                m.status,
-                m.structural_id
-
-            from match_denorm m
-            inner join blob_denorm b on (m.blob_id = b.blob_id)
-            where m.groups = ?1 and m.rule_structural_id = ?2
-            order by m.blob_id, m.start_byte, m.end_byte
-            limit ?3
-        "#})?;
-
-        let entries = get_blob_metadata_and_match.query_map(
-            (&metadata.groups, &metadata.rule_structural_id, match_limit),
-            |row| {
-                let blob_id = row.get(0)?;
-                let m = Match {
-                    blob_id,
-                    location: Location {
-                        offset_span: OffsetSpan {
-                            start: row.get(1)?,
-                            end: row.get(2)?,
+        let mut entries = vec![];
+        for result in cursor {
+            let doc = result?;
+            let m = Match {
+                blob_id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
+                location: Location {
+                    offset_span: OffsetSpan {
+                        start: doc.get_i64("start_byte")? as usize,
+                        end: doc.get_i64("end_byte")? as usize,
+                    },
+                    source_span: SourceSpan {
+                        start: SourcePoint {
+                            line: doc.get_i64("start_line")? as usize,
+                            column: doc.get_i64("start_column")? as usize,
                         },
-                        source_span: SourceSpan {
-                            start: SourcePoint {
-                                line: row.get(3)?,
-                                column: row.get(4)?,
-                            },
-                            end: SourcePoint {
-                                line: row.get(5)?,
-                                column: row.get(6)?,
-                            },
+                        end: SourcePoint {
+                            line: doc.get_i64("end_line")? as usize,
+                            column: doc.get_i64("end_column")? as usize,
                         },
                     },
-                    snippet: Snippet {
-                        before: BString::new(row.get(7)?),
-                        matching: BString::new(row.get(8)?),
-                        after: BString::new(row.get(9)?),
-                    },
-                    groups: row.get(10)?,
-                    rule_structural_id: metadata.rule_structural_id.clone(),
-                    rule_name: metadata.rule_name.clone(),
-                    rule_text_id: metadata.rule_text_id.clone(),
-                    structural_id: row.get(18)?,
-                };
-                let num_bytes: usize = row.get(11)?;
-                let mime_essence: Option<String> = row.get(12)?;
-                let charset: Option<String> = row.get(13)?;
-                let b = BlobMetadata {
-                    id: blob_id,
-                    num_bytes,
-                    mime_essence,
-                    charset,
-                };
-                let id = MatchIdInt(row.get(14)?);
-                let m_score = row.get(15)?;
-                let m_comment = row.get(16)?;
-                let m_status = row.get(17)?;
-                Ok((b, id, m, m_score, m_comment, m_status))
-            },
-        )?;
-        let mut es = Vec::new();
-        for e in entries {
-            let (md, id, m, match_score, match_comment, match_status) = e?;
-            let ps = self.get_target_set(&md)?;
-            es.push(FindingDataEntry {
-                target: ps,
-                blob_metadata: md,
-                match_id: id,
+                },
+                snippet: Snippet {
+                    before: BString::new(doc.get_binary_generic("snippet_before")?.to_vec()),
+                    matching: BString::new(doc.get_binary_generic("snippet_matching")?.to_vec()),
+                    after: BString::new(doc.get_binary_generic("snippet_after")?.to_vec()),
+                },
+                groups: Groups::from(doc.get_array("groups")?.clone()),
+                rule_structural_id: doc.get_str("rule_structural_id")?.to_string(),
+                rule_name: metadata.rule_name.clone(),
+                rule_text_id: metadata.rule_text_id.clone(),
+                structural_id: doc.get_str("structural_id")?.to_string(),
+            };
+
+            let blob_metadata = BlobMetadata {
+                id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
+                num_bytes: doc.get_i64("num_bytes")? as usize,
+                mime_essence: doc.get_str("mime_essence").map(|s| s.to_string()).ok(),
+                charset: doc.get_str("charset").map(|s| s.to_string()).ok(),
+            };
+
+            let entry = FindingDataEntry {
+                target: self.get_target_set(&blob_metadata)?,
+                blob_metadata,
+                match_id: doc.get_i64("match_id")?,
                 match_val: m,
-                match_comment,
-                match_score,
-                match_status,
-            });
+                match_comment: doc.get_str("comment").map(|s| s.to_string()).ok(),
+                match_score: doc.get_f64("score").ok(),
+                // match_status: doc.get_str("status").map(|s| Status::from_str(s)).transpose()?,
+                match_status: match doc.get_str("status") {
+                    Ok(s) => Some(Status::from_str(s).expect("Invalid status")),
+                    Err(_) => None,
+                },
+                
+            };
+
+            entries.push(entry);
         }
-        Ok(es)
+
+        Ok(entries)
     }
 
     fn get_target_set(&self, metadata: &BlobMetadata) -> Result<TargetSet> {
-        let mut get = self.conn.prepare_cached(indoc! {r#"
-            select target
-            from blob_target_denorm
-            where blob_id = ?
-            order by target
-        "#})?;
-
-        let ps = get.query_map((metadata.id,), val_from_row)?;
-
-        let results = collect(ps)?;
-        match TargetSet::try_from_iter(results) {
-            Some(ps) => Ok(ps),
+        let collection: Collection<Document> = self.db.collection("blob_targets");
+        let cursor = collection.find(doc! { "blob_id": Bson::from(metadata.id) })?;
+        let mut targets = vec![];
+    
+        for result in cursor {
+            let doc = result?;
+            let target_str = doc.get_str("target")?;
+            let target = Target::from_str(target_str).expect("Invalid Target");
+            targets.push(target);
+        }
+    
+        match TargetSet::try_from_iter(targets) {
+            Some(ts) => Ok(ts),
             None => bail!("should have at least 1 target entry"),
         }
     }
+    
+    
+    // fn get_target_set(&self, metadata: &BlobMetadata) -> Result<TargetSet> {
+    //     let collection: Collection<Document> = self.db.collection("blob_targets");
+    //     let cursor = collection.find(doc! { "blob_id": Bson::from(metadata.id) })?;
+    //     let mut targets = vec![];
 
-    fn open_impl(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        let db_path = root_dir.join("datastore.db");
-        let conn = Self::new_connection(&db_path, cache_size)?;
-        let root_dir = root_dir.canonicalize()?;
-        let ds = Self { root_dir, conn };
-        Ok(ds)
-    }
+    //     for result in cursor {
+    //         let doc = result?;
+    //         targets.push(Target::from_str(doc.get_str("target")?).expect("Invalid Target"));
+    //     }
 
-    fn new_connection(path: &Path, cache_size: i64) -> Result<Connection> {
-        let conn = Connection::open(path)?;
-
-        conn.pragma_update(None, "journal_mode", "wal")?; // https://www.sqlite.org/wal.html
-        conn.pragma_update(None, "foreign_keys", "on")?; // https://sqlite.org/foreignkeys.html
-        conn.pragma_update(None, "synchronous", "normal")?; // https://sqlite.org/pragma.html#pragma_synchronous
-        conn.pragma_update(None, "cache_size", cache_size)?; // sqlite.org/pragma.html#pragma_cache_size
-
-        Ok(conn)
-    }
-
-    fn check_schema_version(&self) -> Result<()> {
-        let user_version: u64 = self
-            .conn
-            .pragma_query_value(None, "user_version", val_from_row)?;
-        if user_version != CURRENT_SCHEMA_VERSION {
-            bail!(
-                "Unsupported schema version {user_version} (expected {}): \
-                  datastores from other versions of Nosey Parker are not supported",
-                CURRENT_SCHEMA_VERSION
-            );
-        }
-        Ok(())
-    }
-
-    fn migrate_0_60(&mut self) -> Result<()> {
-        let _span = debug_span!("Datastore::migrate_0_60", "{}", self.root_dir.display()).entered();
-        let tx = self.conn.transaction()?;
-
-        let get_user_version = || -> Result<u64> {
-            let user_version = tx.pragma_query_value(None, "user_version", val_from_row)?;
-            Ok(user_version)
-        };
-
-        let set_user_version = |user_version: u64| -> Result<()> {
-            tx.pragma_update(None, "user_version", user_version)?;
-            Ok(())
-        };
-
-        let user_version: u64 = get_user_version()?;
-        if user_version > 0 && user_version < CURRENT_SCHEMA_VERSION {
-            bail!(
-                "This datastore has schema version {user_version}. \
-                   Datastores from other Nosey Parker versions are not supported. \
-                   Rescanning the inputs with a new datastore will be required."
-            );
-        }
-        if user_version > CURRENT_SCHEMA_VERSION {
-            bail!("Unknown schema version {user_version}");
-        }
-
-        if user_version == 0 {
-            let new_user_version = CURRENT_SCHEMA_VERSION;
-            debug!("Migrating database schema from version {user_version} to {new_user_version}");
-            tx.execute_batch(CURRENT_SCHEMA)?;
-            set_user_version(new_user_version)?;
-        }
-
-        assert_eq!(get_user_version()?, CURRENT_SCHEMA_VERSION);
-        tx.commit()?;
-
-        Ok(())
-    }
+    //     match TargetSet::try_from_iter(targets) {
+    //         Some(ts) => Ok(ts),
+    //         None => bail!("should have at least 1 target entry"),
+    //     }
+    // }
 }
 
-// -------------------------------------------------------------------------------------------------
-// Implementation Utilities
-// -------------------------------------------------------------------------------------------------
-
-fn collect<T, F>(rows: rusqlite::MappedRows<'_, F>) -> Result<Vec<T>>
-where
-    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-{
-    let mut entries = Vec::new();
-    for row in rows {
-        entries.push(row?);
-    }
-    Ok(entries)
-}
-
-/// Convert a row into a single value.
-///
-/// This function exists to work around an ergonomic deficiency in Rust's type system, which
-/// doesn't allow defining TryFrom<&rusqlite::Row<'_>> for any T that implements rusqlite::types::FromSql.
-/// Without this function, you would have to use 1-tuples all over the place instead.
-fn val_from_row<T>(row: &rusqlite::Row<'_>) -> rusqlite::Result<T>
-where
-    T: rusqlite::types::FromSql,
-{
-    row.get(0)
-}
-
-/// A combinator for "upsert"-like behavior that sqlite doesn't nicely natively support.
-///
-/// This takes two SQL statement arguments: a getter and a setter.
-/// The getter should look up 0 or 1 rows for the given parameters.
-/// The setter should insert a new entry for the given parameters and return 1 row.
-///
-/// Any rows returned by either the getter or the setter should be convertible by the `f` function.
-fn add_if_missing_simple<P, F, T>(
-    get: &mut rusqlite::CachedStatement<'_>,
-    set: &mut rusqlite::CachedStatement<'_>,
-    f: F,
-    params: P,
-) -> rusqlite::Result<T>
-where
-    P: rusqlite::Params + Copy,
-    F: Fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-{
-    add_if_missing(get, set, f, params, params)
-}
-
-/// A combinator for "upsert"-like behavior that sqlite doesn't nicely natively support.
-///
-/// This takes two SQL statement arguments: a getter and a setter.
-/// The getter should look up 0 or 1 rows for the given parameters.
-/// The setter should insert a new entry for the given parameters and return 1 row.
-///
-/// Any rows returned by either the getter or the setter should be convertible by the `f` function.
-fn add_if_missing<P1, P2, F, T>(
-    get: &mut rusqlite::CachedStatement<'_>,
-    set: &mut rusqlite::CachedStatement<'_>,
-    f: F,
-    get_params: P1,
-    set_params: P2,
-) -> rusqlite::Result<T>
-where
-    P1: rusqlite::Params,
-    P2: rusqlite::Params,
-    F: Fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-{
-    match get.query(get_params)?.next()? {
-        Some(row) => f(row),
-        None => f(set
-            .query(set_params)?
-            .next()?
-            .expect("either get or set statement must return a row")),
-    }
-}
-
-/// Get a path for a local clone of the given git URL underneath `root`.
-fn clone_destination(root: &std::path::Path, repo: &GitUrl) -> Result<std::path::PathBuf> {
+fn clone_destination(root: &std::path::Path, repo: &GitUrl) -> Result<PathBuf> {
     Ok(root.join(repo.to_path_buf()))
 }
 
