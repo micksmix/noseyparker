@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use bstr::BString;
 use polodb_core::bson::{doc, Bson, Document};
 use polodb_core::{Collection, Database};
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::{debug, debug_span, info};
 
@@ -28,75 +27,22 @@ pub use finding_metadata::FindingMetadata;
 pub use finding_summary::{FindingSummary, FindingSummaryEntry};
 
 pub struct Datastore {
-    root_dir: PathBuf,
-    db: Database,
+    pub db: Database,
 }
 
 impl Datastore {
-    pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
-
-        Self::create(root_dir, cache_size).or_else(|e| {
-            debug!(
-                "Failed to create datastore: {e:#}: will try to open existing datastore instead"
-            );
-            Self::open(root_dir, cache_size)
-        })
-    }
-
-    pub fn create(root_dir: &Path, _cache_size: i64) -> Result<Self> {
-        debug!("Attempting to create new datastore at {}", root_dir.display());
-
-        std::fs::create_dir_all(root_dir).with_context(|| {
-            format!("Failed to create datastore root directory at {}", root_dir.display())
-        })?;
-
-        std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
-            format!("Failed to write .gitignore to datastore at {}", root_dir.display())
-        })?;
-
-        let db_path = root_dir.join("datastore.pdb");
-        let db = Database::open_file(&db_path)?;
-
-        Ok(Datastore { root_dir: root_dir.to_path_buf(), db })
-    }
-
-    pub fn open(root_dir: &Path, _cache_size: i64) -> Result<Self> {
-        debug!("Attempting to open existing datastore at {}", root_dir.display());
-
-        let db_path = root_dir.join("datastore.pdb");
-        let db = Database::open_file(&db_path)?;
-
-        Ok(Datastore { root_dir: root_dir.to_path_buf(), db })
-    }
-
-    pub fn scratch_dir(&self) -> PathBuf {
-        self.root_dir.join("scratch")
-    }
-
-    pub fn clones_dir(&self) -> PathBuf {
-        self.root_dir.join("clones")
-    }
-
-    pub fn blobs_dir(&self) -> PathBuf {
-        self.root_dir.join("blobs")
-    }
-
-    pub fn root_dir(&self) -> &Path {
-        &self.root_dir
-    }
-
-    pub fn clone_destination(&self, repo: &GitUrl) -> Result<PathBuf> {
-        clone_destination(&self.clones_dir(), repo)
+    pub fn new_in_memory() -> Result<Self> {
+        let db = Database::open_memory().context("Failed to open in-memory database")?;
+        Ok(Datastore { db })
     }
 
     pub fn analyze(&self) -> Result<()> {
-        let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::analyze").entered();
         Ok(())
     }
 
     pub fn begin(&self) -> Result<()> {
-        let _span = debug_span!("Datastore::begin", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::begin").entered();
         Ok(())
     }
 
@@ -113,7 +59,7 @@ impl Datastore {
     }
 
     pub fn get_summary(&self) -> Result<FindingSummary> {
-        let _span = debug_span!("Datastore::get_summary", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_summary").entered();
         let collection: Collection<Document> = self.db.collection("findings");
 
         let cursor = collection.find(doc! {})?;
@@ -137,7 +83,7 @@ impl Datastore {
     }
 
     pub fn get_annotations(&self) -> Result<Annotations> {
-        let _span = debug_span!("Datastore::get_annotations", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_annotations").entered();
 
         let collection: Collection<Document> = self.db.collection("annotations");
         let cursor = collection.find(doc! {})?;
@@ -182,6 +128,7 @@ impl Datastore {
             finding_annotations,
         })
     }
+
     pub fn import_annotations(&mut self, annotations: &Annotations) -> Result<()> {
         #[derive(Default, Debug)]
         struct Stats {
@@ -190,7 +137,7 @@ impl Datastore {
             n_existing: usize,
             n_missing: usize,
         }
-    
+
         impl std::fmt::Display for Stats {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(
@@ -200,17 +147,17 @@ impl Datastore {
                 )
             }
         }
-    
+
         let collection: Collection<Document> = self.db.collection("annotations");
         let mut finding_comment_stats = Stats::default();
         let mut match_comment_stats = Stats::default();
         let mut match_status_stats = Stats::default();
-    
+
         for fa in annotations.finding_annotations.iter() {
             let existing = collection.find_one(doc! { "finding_id": fa.finding_id.clone() })?;
             match existing {
                 Some(doc) => {
-                    if doc.get_str("comment")? == fa.comment.as_str(){//}.unwrap_or("") {
+                    if doc.get_str("comment")? == fa.comment.as_str() {
                         finding_comment_stats.n_existing += 1;
                     } else {
                         finding_comment_stats.n_conflicting += 1;
@@ -223,13 +170,13 @@ impl Datastore {
                         "rule_text_id": &fa.rule_text_id,
                         "rule_structural_id": fa.rule_structural_id.clone(),
                         "groups": Bson::from(fa.groups.clone()),
-                        "comment": fa.comment.as_str()//.unwrap_or("")
+                        "comment": fa.comment.as_str()
                     })?;
                     finding_comment_stats.n_imported += 1;
                 }
             }
         }
-    
+
         for ma in annotations.match_annotations.iter() {
             let existing = collection.find_one(doc! { "match_id": ma.match_id.clone() })?;
             match existing {
@@ -258,22 +205,20 @@ impl Datastore {
                 }
             }
         }
-    
+
         info!(
-            "{} findings and {} matches in datastore at {}",
+            "{} findings and {} matches in datastore",
             self.get_num_findings()?,
-            self.get_num_matches()?,
-            self.root_dir.display()
+            self.get_num_matches()?
         );
         info!("Finding comment annotations: {}", finding_comment_stats);
         info!("Match comment annotations: {}", match_comment_stats);
-    
+
         Ok(())
     }
-    
 
     pub fn get_finding_metadata(&self) -> Result<Vec<FindingMetadata>> {
-        let _span = debug_span!("Datastore::get_finding_metadata", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_finding_metadata").entered();
 
         let collection: Collection<Document> = self.db.collection("findings");
         let cursor = collection.find(doc! {})?;
@@ -301,14 +246,14 @@ impl Datastore {
     pub fn get_finding_data(
         &self,
         metadata: &FindingMetadata,
-        limit: Option<usize>,
     ) -> Result<FindingData> {
-        let _span = debug_span!("Datastore::get_finding_data", "{}", self.root_dir.display()).entered();
+        let _span = debug_span!("Datastore::get_finding_data").entered();
 
         let collection: Collection<Document> = self.db.collection("matches");
+
         let cursor = collection.find(doc! {
             "groups": Bson::from(metadata.groups.clone()),
-            "rule_structural_id": metadata.rule_structural_id
+            "rule_structural_id": metadata.rule_structural_id.clone()
         })?;
 
         let mut entries = vec![];
@@ -354,16 +299,14 @@ impl Datastore {
             let entry = FindingDataEntry {
                 target: self.get_target_set(&blob_metadata)?,
                 blob_metadata,
-                match_id: doc.get_i64("match_id")?,
+                match_id: doc.get_str("match_id")?.to_string(),
                 match_val: m,
                 match_comment: doc.get_str("comment").map(|s| s.to_string()).ok(),
                 match_score: doc.get_f64("score").ok(),
-                // match_status: doc.get_str("status").map(|s| Status::from_str(s)).transpose()?,
                 match_status: match doc.get_str("status") {
                     Ok(s) => Some(Status::from_str(s).expect("Invalid status")),
                     Err(_) => None,
                 },
-                
             };
 
             entries.push(entry);
@@ -376,69 +319,17 @@ impl Datastore {
         let collection: Collection<Document> = self.db.collection("blob_targets");
         let cursor = collection.find(doc! { "blob_id": Bson::from(metadata.id) })?;
         let mut targets = vec![];
-    
+
         for result in cursor {
             let doc = result?;
             let target_str = doc.get_str("target")?;
             let target = Target::from_str(target_str).expect("Invalid Target");
             targets.push(target);
         }
-    
+
         match TargetSet::try_from_iter(targets) {
             Some(ts) => Ok(ts),
             None => bail!("should have at least 1 target entry"),
         }
-    }
-    
-    
-    // fn get_target_set(&self, metadata: &BlobMetadata) -> Result<TargetSet> {
-    //     let collection: Collection<Document> = self.db.collection("blob_targets");
-    //     let cursor = collection.find(doc! { "blob_id": Bson::from(metadata.id) })?;
-    //     let mut targets = vec![];
-
-    //     for result in cursor {
-    //         let doc = result?;
-    //         targets.push(Target::from_str(doc.get_str("target")?).expect("Invalid Target"));
-    //     }
-
-    //     match TargetSet::try_from_iter(targets) {
-    //         Some(ts) => Ok(ts),
-    //         None => bail!("should have at least 1 target entry"),
-    //     }
-    // }
-}
-
-fn clone_destination(root: &std::path::Path, repo: &GitUrl) -> Result<PathBuf> {
-    Ok(root.join(repo.to_path_buf()))
-}
-
-#[cfg(test)]
-mod test {
-    macro_rules! clone_destination_success_tests {
-        ($($case_name:ident: ($root:expr, $repo:expr) => $expected:expr,)*) => {
-            mod clone_destination {
-                use crate::git_url::GitUrl;
-                use pretty_assertions::assert_eq;
-                use std::path::{PathBuf, Path};
-                use std::str::FromStr;
-                use super::super::clone_destination;
-
-                $(
-                    #[test]
-                    fn $case_name() {
-                        let expected: Option<PathBuf> = Some(Path::new($expected).to_owned());
-
-                        let root = Path::new($root);
-                        let repo = GitUrl::from_str($repo).expect("repo should be a URL");
-                        assert_eq!(clone_destination(root, &repo).ok(), expected);
-                    }
-                )*
-            }
-        }
-    }
-
-    clone_destination_success_tests! {
-        https_01: ("rel_root", "https://example.com/testrepo.git") => "rel_root/https/example.com/testrepo.git",
-        https_02: ("/abs_root", "https://example.com/testrepo.git") => "/abs_root/https/example.com/testrepo.git",
     }
 }

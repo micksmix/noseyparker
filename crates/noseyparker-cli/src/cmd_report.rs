@@ -5,12 +5,13 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use std::fmt::{Display, Formatter, Write};
 use tracing::info;
+use polodb_core::bson::{doc, Bson, Document};
+use polodb_core::{Collection, Database};
 
 use noseyparker::blob_metadata::BlobMetadata;
 use noseyparker::bstring_escape::Escaped;
 use noseyparker::datastore::{Datastore, FindingDataEntry, FindingMetadata};
 use noseyparker::datastore::status::Status;
-
 
 use noseyparker::defaults::get_builtin_rules;
 use noseyparker::match_type::{Group, Groups, Match};
@@ -27,8 +28,10 @@ mod styles;
 use styles::{StyledObject, Styles};
 
 pub fn run(global_args: &GlobalArgs, args: &ReportArgs) -> Result<()> {
-    let datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
+    // Initialize in-memory datastore
+    // let db = Database::open_memory().context("Failed to open in-memory database")?;
+    let datastore = Datastore::new_in_memory()?;
+
     let output = args
         .output_args
         .get_writer()

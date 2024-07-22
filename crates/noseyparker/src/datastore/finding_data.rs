@@ -2,7 +2,7 @@ use crate::blob_metadata::BlobMetadata;
 use crate::match_type::Match;
 use crate::target_set::TargetSet;
 
-use super::MatchIdInt;
+// use super::MatchIdInt;
 use super::Status;
 
 // -------------------------------------------------------------------------------------------------
@@ -19,7 +19,7 @@ pub type FindingData = Vec<FindingDataEntry>;
 pub struct FindingDataEntry {
     pub target: TargetSet,
     pub blob_metadata: BlobMetadata,
-    pub match_id: MatchIdInt,
+    pub match_id: String,
     pub match_val: Match,
     pub match_comment: Option<String>,
     pub match_score: Option<f64>,

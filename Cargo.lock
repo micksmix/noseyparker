@@ -2627,6 +2627,7 @@ dependencies = [
  "noseyparker",
  "noseyparker-digest",
  "noseyparker-rules",
+ "polodb_core",
  "predicates",
  "pretty_assertions",
  "prettytable-rs",
@@ -2947,9 +2948,9 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
 name = "polodb_core"
-version = "4.4.1"
+version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95b09216dafcdd6fcd527fad491604b3d2013a7fabdf010549264a18e5ef8644"
+checksum = "714bc48cfa44e6713512efabffe69887e564e5d88b0fdc83d27c0c1d3137e857"
 dependencies = [
  "bson",
  "byteorder",

@@ -148,27 +148,27 @@ impl CommandLineArgs {
 
         use clap::parser::ValueSource;
 
-        // Make sure that if the `scan` command is specified and the default datastore is used,
-        // that the datastore does not already exist.
-        // See #74.
-        if let Some(("scan", sub_matches)) = matches.subcommand() {
-            let datastore_value: &PathBuf = sub_matches
-                .get_one("datastore")
-                .expect("datastore arg should be present");
-            if let Some(ValueSource::DefaultValue) = sub_matches.value_source("datastore") {
-                if datastore_value.exists() {
-                    cmd.error(
-                        clap::error::ErrorKind::InvalidValue,
-                        format!(
-                            "the default datastore at {} exists; \
-                                       explicitly specify the datastore if you wish to update it",
-                            datastore_value.display()
-                        ),
-                    )
-                    .exit();
-                }
-            }
-        }
+        // // Make sure that if the `scan` command is specified and the default datastore is used,
+        // // that the datastore does not already exist.
+        // // See #74.
+        // if let Some(("scan", sub_matches)) = matches.subcommand() {
+        //     let datastore_value: &PathBuf = sub_matches
+        //         .get_one("datastore")
+        //         .expect("datastore arg should be present");
+        //     if let Some(ValueSource::DefaultValue) = sub_matches.value_source("datastore") {
+        //         if datastore_value.exists() {
+        //             cmd.error(
+        //                 clap::error::ErrorKind::InvalidValue,
+        //                 format!(
+        //                     "the default datastore at {} exists; \
+        //                                explicitly specify the datastore if you wish to update it",
+        //                     datastore_value.display()
+        //                 ),
+        //             )
+        //             .exit();
+        //         }
+        //     }
+        // }
 
         let mut args = match <Self as clap::FromArgMatches>::from_arg_matches(&matches) {
             Ok(args) => args,
@@ -265,12 +265,6 @@ pub enum Command {
     /// Manage rules and rulesets
     #[command(display_order = 30, alias = "rule")]
     Rules(RulesArgs),
-
-    /// Manage annotations (experimental)
-    ///
-    /// Annotations include assigned status (`accept` or `reject`) and freeform comments.
-    #[command(display_order = 40)]
-    Annotations(AnnotationsArgs),
 
     /// Generate Nosey Parker release assets
     ///
@@ -601,19 +595,8 @@ pub enum DatastoreExportOutputFormat {
 /// Arguments for the `scan` command
 #[derive(Args, Debug)]
 pub struct ScanArgs {
-    /// Use the specified datastore
-    ///
-    /// The datastore will be created if it does not exist.
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::DirPath,
-        env("NP_DATASTORE"),
-        default_value=DEFAULT_DATASTORE,
-    )]
-    pub datastore: PathBuf,
-
+    // Remove the datastore argument
+    // pub datastore: PathBuf,
     /// Use N parallel scanning threads
     #[arg(long("jobs"), short('j'), value_name="N", default_value_t=default_scan_jobs())]
     pub num_jobs: usize,
@@ -631,9 +614,6 @@ pub struct ScanArgs {
     pub metadata_args: MetadataArgs,
 
     /// Include up to the specified number of bytes before and after each match
-    ///
-    /// The default value typically gives between 4 and 7 lines of context before and after each
-    /// match.
     #[arg(
         long,
         value_name = "BYTES",
@@ -643,13 +623,6 @@ pub struct ScanArgs {
     pub snippet_length: usize,
 
     /// Specify which blobs will be copied in entirety to the datastore
-    ///
-    /// If this option is enabled, corresponding blobs will be written to the `blobs` directory within the datastore.
-    /// The format of that directory is similar to Git's "loose" object format:
-    /// the first 2 characters of the hex-encoded blob ID name a subdirectory, and the remaining characters are used as the filename.
-    ///
-    /// This mechanism exists to aid in ad-hoc downstream investigation.
-    /// Copied blobs are not used elsewhere in Nosey Parker at this point.
     #[arg(
         long,
         default_value_t=CopyBlobsMode::None,
@@ -658,6 +631,7 @@ pub struct ScanArgs {
     )]
     pub copy_blobs: CopyBlobsMode,
 }
+
 
 #[derive(Args, Debug)]
 #[command(next_help_heading = "Rule Selection Options")]
@@ -930,36 +904,23 @@ impl ContentFilteringArgs {
 // -----------------------------------------------------------------------------
 #[derive(Args, Debug)]
 pub struct SummarizeArgs {
-    /// Use the specified datastore
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::DirPath,
-        env("NP_DATASTORE"),
-        default_value=DEFAULT_DATASTORE,
-    )]
-    pub datastore: PathBuf,
+    // Remove this line
+    // #[arg(long, short, value_name = "PATH", value_hint = ValueHint::DirPath, env("NP_DATASTORE"), default_value=DEFAULT_DATASTORE)]
+    // pub datastore: PathBuf,
 
     #[command(flatten)]
     pub output_args: OutputArgs<SummarizeOutputFormat>,
 }
+
 
 // -----------------------------------------------------------------------------
 // `report` command
 // -----------------------------------------------------------------------------
 #[derive(Args, Debug)]
 pub struct ReportArgs {
-    /// Use the specified datastore
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::DirPath,
-        env("NP_DATASTORE"),
-        default_value=DEFAULT_DATASTORE,
-    )]
-    pub datastore: PathBuf,
+    // Remove this line
+    // #[arg(long, short, value_name = "PATH", value_hint = ValueHint::DirPath, env("NP_DATASTORE"), default_value=DEFAULT_DATASTORE)]
+    // pub datastore: PathBuf,
 
     #[command(flatten)]
     pub filter_args: ReportFilterArgs,
@@ -1008,74 +969,6 @@ pub enum FindingStatus {
     Mixed,
     /// Findings without any `accept` or `reject` matches
     Null,
-}
-
-// -----------------------------------------------------------------------------
-// `annotations` command
-// -----------------------------------------------------------------------------
-#[derive(Args, Debug)]
-pub struct AnnotationsArgs {
-    #[command(subcommand)]
-    pub command: AnnotationsCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum AnnotationsCommand {
-    /// Export annotations from a datastore (experimental)
-    Export(AnnotationsExportArgs),
-
-    /// Import annotations into a datastore (experimental)
-    Import(AnnotationsImportArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct AnnotationsExportArgs {
-    /// Use the specified datastore
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::DirPath,
-        env("NP_DATASTORE"),
-        default_value=DEFAULT_DATASTORE,
-    )]
-    pub datastore: PathBuf,
-
-    /// Write annotations to the specified path
-    ///
-    /// If this argument is not provided, stdout will be used.
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::FilePath,
-    )]
-    pub output: Option<PathBuf>,
-}
-
-#[derive(Args, Debug)]
-pub struct AnnotationsImportArgs {
-    /// Use the specified datastore
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::DirPath,
-        env("NP_DATASTORE"),
-        default_value=DEFAULT_DATASTORE,
-    )]
-    pub datastore: PathBuf,
-
-    /// Read annotations from the specified path
-    ///
-    /// If this argument is not provided, stdin will be used.
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::FilePath,
-    )]
-    pub input: Option<PathBuf>,
 }
 
 // -----------------------------------------------------------------------------

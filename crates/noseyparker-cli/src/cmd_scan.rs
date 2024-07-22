@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use indicatif::{HumanBytes, HumanCount, HumanDuration};
 use rayon::prelude::*;
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -32,6 +31,8 @@ use noseyparker::matcher_stats::MatcherStats;
 use noseyparker::target::Target;
 use noseyparker::target_set::TargetSet;
 use noseyparker::rules_database::RulesDatabase;
+use std::path::PathBuf;
+use std::path::Path;
 
 type DatastoreMessage = (TargetSet, BlobMetadata, Vec<(Option<f64>, Match)>);
 
@@ -60,14 +61,10 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
         .context("Failed to initialize Rayon")?;
 
     // ---------------------------------------------------------------------------------------------
-    // Open datastore
+    // Open in-memory datastore
     // ---------------------------------------------------------------------------------------------
-    init_progress.set_message("Initializing datastore...");
-    let mut datastore =
-        Datastore::create_or_open(&args.datastore, global_args.advanced.sqlite_cache_size)
-            .with_context(|| {
-                format!("Failed to open datastore at {}", &args.datastore.display())
-            })?;
+    init_progress.set_message("Initializing in-memory datastore...");
+    let datastore = Datastore::new_in_memory().context("Failed to open in-memory database")?;
 
     // ---------------------------------------------------------------------------------------------
     // Load rules
@@ -102,7 +99,6 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
         Ok(())
     };
     record_rules().context("Failed to record rules to the datastore")?;
-
 
     drop(init_progress);
 
@@ -179,17 +175,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             Progress::new_bar(repo_urls.len() as u64, "Fetching Git repos", progress_enabled);
 
         for repo_url in repo_urls {
-            let output_dir = match datastore.clone_destination(&repo_url) {
-                Err(e) => {
-                    progress.suspend(|| {
-                        error!("Failed to determine output directory for {repo_url}: {e}");
-                        warn!("Skipping scan of {repo_url}");
-                    });
-                    progress.inc(1);
-                    continue;
-                }
-                Ok(output_dir) => output_dir,
-            };
+            let output_dir = PathBuf::new(); // Placeholder as we're not writing to disk
 
             // First, try to update an existing clone, and if that fails, do a fresh clone
             if output_dir.is_dir() {
@@ -257,35 +243,31 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             // Load default ignore file. Note that we have to write it to a file first,
             // because the API for the `ignore` crate doesn't expose something that takes a
             // string.
-            let ignore_path = datastore.scratch_dir().join("default_ignore_rules.conf");
-            std::fs::write(&ignore_path, DEFAULT_IGNORE_RULES).with_context(|| {
-                format!("Failed to write default ignore rules to {}", ignore_path.display())
-            })?;
+            // let ignore_path = PathBuf::new(); // Placeholder as we're not writing to disk
 
-            ie.add_ignore(&ignore_path).with_context(|| {
-                format!("Failed to load ignore rules from {}", ignore_path.display())
-            })?;
+            // ie.add_ignore(&ignore_path).with_context(|| {
+            //     format!("Failed to load ignore rules from {}", ignore_path.display())
+            // })?;
 
-            // Load any specified ignore files
-            for ignore_path in args.content_filtering_args.ignore.iter() {
-                debug!("Using ignore rules from {}", ignore_path.display());
-                ie.add_ignore(ignore_path).with_context(|| {
-                    format!("Failed to load ignore rules from {}", ignore_path.display())
-                })?;
-            }
+            // // Load any specified ignore files
+            // for ignore_path in args.content_filtering_args.ignore.iter() {
+            //     debug!("Using ignore rules from {}", ignore_path.display());
+            //     ie.add_ignore(ignore_path).with_context(|| {
+            //         format!("Failed to load ignore rules from {}", ignore_path.display())
+            //     })?;
+            // }
 
-            // Make sure the datastore itself is not scanned
-            let datastore_path = std::fs::canonicalize(datastore.root_dir())?;
-            ie.filter_entry(move |entry| {
-                let path = match std::fs::canonicalize(entry.path()) {
-                    Err(e) => {
-                        warn!("Failed to canonicalize path {}: {}", entry.path().display(), e);
-                        return true;
-                    }
-                    Ok(p) => p,
-                };
-                path != datastore_path
-            });
+            // // Make sure the datastore itself is not scanned
+            // ie.filter_entry(move |entry| {
+            //     let path = match std::fs::canonicalize(entry.path()) {
+            //         Err(e) => {
+            //             warn!("Failed to canonicalize path {}: {}", entry.path().display(), e);
+            //             return true;
+            //         }
+            //         Ok(p) => p,
+            //     };
+            //     path != PathBuf::new() // Placeholder as we're not writing to disk
+            // });
 
             // Determine whether to collect git metadata or not
             let collect_git_metadata = match args.metadata_args.git_blob_target {
@@ -355,15 +337,13 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
     let channel_size = std::cmp::max(args.num_jobs * BATCH_SIZE, 64 * BATCH_SIZE);
     let (send_ds, recv_ds) = crossbeam_channel::bounded::<DatastoreMessage>(channel_size);
 
-    let blobs_dir = datastore.blobs_dir();
+    let blobs_dir = PathBuf::new(); // Placeholder as we're not writing to disk
 
-    
     // Create a separate thread for writing matches to the datastore.
     let datastore_writer_thread = std::thread::Builder::new()
         .name("datastore".to_string())
         .spawn(move || -> Result<_> {
-            let _span = error_span!("datastore", dir = datastore.root_dir().display().to_string())
-                .entered();
+            let _span = error_span!("datastore").entered();
             let mut total_recording_time: std::time::Duration = Default::default();
 
             let mut num_matches_added: u64 = 0;
@@ -432,112 +412,127 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             Ok((datastore, num_matches, num_matches_added))
         })?;
 
-        fn record_batch(collection: &Collection<Document>, batch: &[DatastoreMessage]) -> Result<u64> {
-            let mut num_added = 0;
-            for message in batch {
-                let (target, blob_metadata, matches) = message;
-                let target_doc = convert_target_to_document(target);
-                let blob_doc = convert_blob_metadata_to_document(blob_metadata);
-                
-                for (score, match_data) in matches {
-                    let match_doc = convert_match_to_document(match_data, score);
-                    let doc = doc! {
-                        "target": target_doc.clone(),
-                        "blob_metadata": blob_doc.clone(),
-                        "match": match_doc,
-                    };
-                    collection.insert_one(doc)?;
-                    num_added += 1;
+    fn record_batch(collection: &Collection<Document>, batch: &[DatastoreMessage]) -> Result<u64> {
+        let mut num_added = 0;
+        for message in batch {
+            let (target, blob_metadata, matches) = message;
+            let target_doc = convert_target_to_document(target);
+            let blob_doc = convert_blob_metadata_to_document(blob_metadata);
+
+            for (score, match_data) in matches {
+                let match_doc = convert_match_to_document(match_data, score);
+                let doc = doc! {
+                    "target": target_doc.clone(),
+                    "blob_metadata": blob_doc.clone(),
+                    "match": match_doc,
+                };
+
+                // todo: Debugging logs
+                for (key, value) in &doc {
+                    println!("{}: {:?}", key, value);
                 }
+                collection.insert_one(doc)?;
+                num_added += 1;
             }
-            Ok(num_added)
+        }
+        Ok(num_added)
+    }
+
+    fn convert_target_to_document(target: &TargetSet) -> Document {
+        let mut targets = Vec::new();
+
+        for t in target.iter() {
+            targets.push(convert_single_target_to_document(t));
         }
 
+        doc! {
+            "primary": convert_single_target_to_document(target.first()),
+            "additional": targets,
+        }
+    }
 
-        fn convert_target_to_document(target: &TargetSet) -> Document {
-            let mut targets = Vec::new();
-            
-            for t in target.iter() {
-                targets.push(convert_single_target_to_document(t));
-            }
-        
-            doc! {
-                "primary": convert_single_target_to_document(target.first()),
-                "additional": targets,
-            }
+    fn convert_single_target_to_document(target: &Target) -> Document {
+        match target {
+            Target::File(file_target) => doc! {
+                "type": "file",
+                "path": file_target.path.to_string_lossy().into_owned(),
+            },
+            Target::GitRepo(git_repo_target) => doc! {
+                "type": "git_repo",
+                "path": git_repo_target.repo_path.to_string_lossy().into_owned(),
+            },
+            // Handle other variants based on your actual Target enum
+            _ => doc! {
+                "type": "unknown",
+                "description": format!("{:?}", target),
+            },
         }
+    }
 
-        fn convert_single_target_to_document(target: &Target) -> Document {
-            match target {
-                Target::File(file_target) => doc! {
-                    "type": "file",
-                    "path": file_target.path.to_string_lossy().into_owned(),
-                },
-                Target::GitRepo(git_repo_target) => doc! {
-                    "type": "git_repo",
-                    "path": git_repo_target.repo_path.to_string_lossy().into_owned(),
-                },
-                // Handle other variants based on your actual Target enum
-                _ => doc! {
-                    "type": "unknown",
-                    "description": format!("{:?}", target),
-                },
-            }
+    fn convert_blob_metadata_to_document(metadata: &BlobMetadata) -> Document {
+        doc! {
+            "id": metadata.id.to_string(),
+            "num_bytes": metadata.num_bytes as i64,
+            "mime_essence": metadata.mime_essence.clone(),
+            "charset": metadata.charset.clone(),
         }
-        
-        fn convert_blob_metadata_to_document(metadata: &BlobMetadata) -> Document {
-            doc! {
-                "id": metadata.id.to_string(),
-                "num_bytes": metadata.num_bytes as i64,
-                "mime_essence": metadata.mime_essence.clone(),
-                "charset": metadata.charset.clone(),
-            }
-        }
-        
-        fn convert_match_to_document(match_data: &Match, score: &Option<f64>) -> Document {
-            doc! {
-                "blob_id": match_data.blob_id.to_string(),
-                "location": convert_location_to_document(&match_data.location),
-                "snippet": convert_snippet_to_document(&match_data.snippet),
-                "groups": convert_groups_to_array(&match_data.groups),
-                "rule_structural_id": match_data.rule_structural_id.clone(),
-                "rule_name": match_data.rule_name.clone(),
-                "rule_text_id": match_data.rule_text_id.clone(),
-                "structural_id": match_data.structural_id.clone(),
-                "score": score.map(Bson::Double),
-            }
-        }
-        
-        fn convert_location_to_document(location: &Location) -> Document {
-            doc! {
-                "offset_span": doc! {
-                    "start": location.offset_span.start as i64,
-                    "end": location.offset_span.end as i64,
-                },
-                "source_span": doc! {
-                    "start": doc! {
-                        "line": location.source_span.start.line as i64,
-                        "column": location.source_span.start.column as i64,
-                    },
-                    "end": doc! {
-                        "line": location.source_span.end.line as i64,
-                        "column": location.source_span.end.column as i64,
-                    },
-                },
-            }
-        }
-        
-        fn convert_snippet_to_document(snippet: &Snippet) -> Document {
-            doc! {
-                "before": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.before.clone().into() }),
-                "matching": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.matching.clone().into() }),
-                "after": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.after.clone().into() }),
-            }
-        }   
+    }
 
-        fn convert_groups_to_array(groups: &Groups) -> Vec<Bson> {
-            groups.0.iter().map(|g| Bson::String(String::from_utf8_lossy(&g.0).into_owned())).collect()
+    fn convert_match_to_document(match_data: &Match, score: &Option<f64>) -> Document {
+        let mut doc = doc! {
+            "blob_id": match_data.blob_id.to_string(),
+            "location": convert_location_to_document(&match_data.location),
+            "snippet": convert_snippet_to_document(&match_data.snippet),
+            "groups": convert_groups_to_array(&match_data.groups),
+            "rule_structural_id": match_data.rule_structural_id.clone(),
+            "rule_name": match_data.rule_name.clone(),
+            "rule_text_id": match_data.rule_text_id.clone(),
+            "structural_id": match_data.structural_id.clone(),
+        };
+    
+        if let Some(s) = score {
+            doc.insert("score", Bson::Double(*s));
         }
+    
+    // // Debugging logs
+    // for (key, value) in &doc {
+    //     println!("{}: {:?}", key, value);
+    // }
+
+        doc
+    }
+    
+    fn convert_location_to_document(location: &Location) -> Document {
+        doc! {
+            "offset_span": doc! {
+                "start": location.offset_span.start as i64,
+                "end": location.offset_span.end as i64,
+            },
+            "source_span": doc! {
+                "start": doc! {
+                    "line": location.source_span.start.line as i64,
+                    "column": location.source_span.start.column as i64,
+                },
+                "end": doc! {
+                    "line": location.source_span.end.line as i64,
+                    "column": location.source_span.end.column as i64,
+                },
+            },
+        }
+    }
+    
+    fn convert_snippet_to_document(snippet: &Snippet) -> Document {
+        doc! {
+            "before": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.before.clone().into() }),
+            "matching": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.matching.clone().into() }),
+            "after": Bson::Binary(polodb_core::bson::Binary { subtype: polodb_core::bson::spec::BinarySubtype::Generic, bytes: snippet.after.clone().into() }),
+        }
+    }
+    
+    fn convert_groups_to_array(groups: &Groups) -> Vec<Bson> {
+        groups.0.iter().map(|g| Bson::String(String::from_utf8_lossy(&g.0).into_owned())).collect()
+    }
+    
 
     // A function to be immediately called, to allow syntactic simplification of error propagation
     let scan_inner = || -> Result<()> {

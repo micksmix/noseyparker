@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use indicatif::HumanCount;
+use polodb_core::Database;
 
 use noseyparker::datastore::{Datastore, FindingSummary};
 
@@ -47,8 +48,10 @@ impl FindingSummaryReporter {
 }
 
 pub fn run(global_args: &GlobalArgs, args: &SummarizeArgs) -> Result<()> {
-    let datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
+    // Initialize in-memory datastore
+    let db = Database::open_memory().context("Failed to open in-memory database")?;
+    let datastore = Datastore::new_in_memory()?;
+
     let output = args
         .output_args
         .get_writer()
