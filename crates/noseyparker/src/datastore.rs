@@ -4,6 +4,7 @@ use polodb_core::bson::{doc, Bson, Document};
 use polodb_core::{Collection, Database};
 use std::str::FromStr;
 use tracing::{debug, debug_span, info};
+use std::collections::HashMap;
 
 use crate::blob_id::BlobId;
 use crate::blob_metadata::BlobMetadata;
@@ -38,6 +39,49 @@ impl Datastore {
 
     pub fn analyze(&self) -> Result<()> {
         let _span = debug_span!("Datastore::analyze").entered();
+        
+        let matches_collection: Collection<Document> = self.db.collection("matches");
+        let findings_collection: Collection<Document> = self.db.collection("findings");
+        
+        // Clear existing findings
+        findings_collection.delete_many(doc! {})?;
+    
+        // Retrieve all matches
+        let matches_cursor = matches_collection.find(doc! {})?;
+    
+        // Use a HashMap to group matches by rule and finding
+        let mut findings_map: HashMap<(String, String, String), Vec<Document>> = HashMap::new();
+    
+        for match_doc in matches_cursor {
+            let doc = match_doc?;
+            let match_data = doc.get_document("match").context("'match' field not present")?;
+            let rule_name = match_data.get_str("rule_name").unwrap_or("Unknown Rule");
+            let rule_text_id = match_data.get_str("rule_text_id").unwrap_or("");
+            let rule_structural_id = match_data.get_str("rule_structural_id").unwrap_or("");
+            let finding_id = match_data.get_str("finding_id").unwrap_or("");
+    
+            let key = (rule_name.to_string(), rule_structural_id.to_string(), finding_id.to_string());
+            findings_map.entry(key).or_insert_with(Vec::new).push(doc);
+        }
+    
+        // Create findings from grouped matches
+        for ((rule_name, rule_structural_id, finding_id), matches) in findings_map {
+            let count = matches.len() as i64;
+            let finding_doc = doc! {
+                "rule_name": rule_name,
+                "rule_structural_id": rule_structural_id,
+                "finding_id": finding_id,
+                "count": count,
+                "matches": matches,
+                "accept_count": 0i64,
+                "reject_count": 0i64,
+                "mixed_count": 0i64,
+                "unlabeled_count": count
+            };
+    
+            findings_collection.insert_one(finding_doc)?;
+        }
+    
         Ok(())
     }
 
@@ -61,25 +105,38 @@ impl Datastore {
     pub fn get_summary(&self) -> Result<FindingSummary> {
         let _span = debug_span!("Datastore::get_summary").entered();
         let collection: Collection<Document> = self.db.collection("findings");
-
+    
         let cursor = collection.find(doc! {})?;
-        let mut entries = vec![];
-
+        let mut summary_map: HashMap<String, FindingSummaryEntry> = HashMap::new();
+    
         for result in cursor {
             let doc = result?;
-            let entry = FindingSummaryEntry {
-                rule_name: doc.get_str("rule_name")?.to_string(),
-                distinct_count: doc.get_i64("distinct_count")? as usize,
-                total_count: doc.get_i64("total_count")? as usize,
-                accept_count: doc.get_i64("accept_count")? as usize,
-                reject_count: doc.get_i64("reject_count")? as usize,
-                mixed_count: doc.get_i64("mixed_count")? as usize,
-                unlabeled_count: doc.get_i64("unlabeled_count")? as usize,
-            };
-            entries.push(entry);
+            let rule_name = doc.get_str("rule_name")?.to_string();
+            let count = doc.get_i64("count")? as usize;
+            let accept_count = doc.get_i64("accept_count")? as usize;
+            let reject_count = doc.get_i64("reject_count")? as usize;
+            let mixed_count = doc.get_i64("mixed_count")? as usize;
+            let unlabeled_count = doc.get_i64("unlabeled_count")? as usize;
+    
+            summary_map.entry(rule_name.clone()).and_modify(|e| {
+                e.distinct_count += 1;
+                e.total_count += count;
+                e.accept_count += accept_count;
+                e.reject_count += reject_count;
+                e.mixed_count += mixed_count;
+                e.unlabeled_count += unlabeled_count;
+            }).or_insert(FindingSummaryEntry {
+                rule_name,
+                distinct_count: 1,
+                total_count: count,
+                accept_count,
+                reject_count,
+                mixed_count,
+                unlabeled_count,
+            });
         }
-
-        Ok(FindingSummary(entries))
+    
+        Ok(FindingSummary(summary_map.into_values().collect()))
     }
 
     pub fn get_annotations(&self) -> Result<Annotations> {
@@ -221,6 +278,10 @@ impl Datastore {
         let _span = debug_span!("Datastore::get_finding_metadata").entered();
 
         let collection: Collection<Document> = self.db.collection("findings");
+
+        let count = collection.count_documents()?;
+        debug!("Number of documents in 'findings' collection: {}", count);
+
         let cursor = collection.find(doc! {})?;
         let mut entries = vec![];
 

@@ -427,10 +427,10 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                     "match": match_doc,
                 };
 
-                // todo: Debugging logs
-                for (key, value) in &doc {
-                    println!("{}: {:?}", key, value);
-                }
+                // // todo: Debugging logs
+                // for (key, value) in &doc {
+                //     println!("{}: {:?}", key, value);
+                // }
                 collection.insert_one(doc)?;
                 num_added += 1;
             }
@@ -763,8 +763,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
         if num_matches > 0 {
             let summary = datastore
                 .get_summary()
-                .context("Failed to get finding summary")
-                .unwrap();
+                .context("Failed to get finding summary")?;
             let table = crate::cmd_summarize::summary_table(&summary);
             println!();
             table.print_tty(global_args.use_color(std::io::stdout()))?;
