@@ -7,6 +7,24 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "***Debug executable 'noseyparker-cli'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=noseyparker-cli",
+                    "--package=noseyparker-cli"
+                ],
+                "filter": {
+                    "name": "noseyparker-cli",
+                    "kind": "bin"
+                }
+            },
+            "args": ["scan","/Users/mickg/src/kingfisher"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Debug unit tests in library 'bstring_serde'",
             "cargo": {
                 "args": [
@@ -135,24 +153,6 @@
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug executable 'noseyparker-cli'",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=noseyparker-cli",
-                    "--package=noseyparker-cli"
-                ],
-                "filter": {
-                    "name": "noseyparker-cli",
-                    "kind": "bin"
-                }
-            },
-            "args": ["scan","/Users/norrisch/dev/kingfisher"],
             "cwd": "${workspaceFolder}"
         },
         {

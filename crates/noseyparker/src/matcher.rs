@@ -64,22 +64,22 @@ struct UserData {
 ///
 /// If doing multi-threaded scanning, use a separate `Matcher` for each thread.
 pub struct Matcher<'a> {
-    /// A scratch buffer for Vectorscan
+    // Vectorscan scanner: used for high-performance pattern matching
     vs_scanner: vectorscan_rs::BlockScanner<'a>,
 
-    /// The rules database used for matching
+    // Database of rules to match against
     rules_db: &'a RulesDatabase,
 
-    /// Local statistics for this `Matcher`
+    // Statistics for this specific Matcher instance
     local_stats: MatcherStats,
 
-    /// Global statistics, updated with the local statsistics when this `Matcher` is dropped
+    // Optional global statistics, updated when this Matcher is dropped
     global_stats: Option<&'a Mutex<MatcherStats>>,
 
-    /// The set of blobs that have been seen
+    // Set of blobs that have been scanned before
     seen_blobs: &'a BlobIdMap<bool>,
 
-    /// Data passed to the Vectorscan callback
+    // Data passed to Vectorscan callbacks
     user_data: UserData,
 }
 
@@ -93,14 +93,15 @@ impl<'a> Drop for Matcher<'a> {
     }
 }
 
+// Possible results from scanning a blob
 pub enum ScanResult<'a> {
-    SeenWithMatches,
-    SeenSansMatches,
-    New(Vec<BlobMatch<'a>>),
+    SeenWithMatches,    // Blob was seen before and had matches
+    SeenSansMatches,    // Blob was seen before but had no matches
+    New(Vec<BlobMatch<'a>>), // New blob with its matches
 }
 
 impl<'a> Matcher<'a> {
-    /// Create a new `Matcher` from the given `RulesDatabase`.
+    /// Create a new `Matcher` instnce from the given `RulesDatabase`.
     ///
     /// If `global_stats` is provided, it will be updated with the local stats from this `Matcher`
     /// when it is dropped.
@@ -114,6 +115,8 @@ impl<'a> Matcher<'a> {
             raw_matches_scratch,
             input_len: 0,
         };
+
+        // Initialize Vectorscan scanner with the compiled rules database
         let vs_scanner = vectorscan_rs::BlockScanner::new(&rules_db.vsdb)?;
         Ok(Matcher {
             vs_scanner,
@@ -125,11 +128,19 @@ impl<'a> Matcher<'a> {
         })
     }
 
+    // Perform raw scanning of bytes using Vectorscan
     fn scan_bytes_raw(&mut self, input: &[u8]) -> Result<()> {
         self.user_data.raw_matches_scratch.clear();
         self.user_data.input_len = input.len().try_into().unwrap();
+
+        // Use Vectorscan to scan the input
         self.vs_scanner
             .scan(input, |rule_id: u32, from: u64, to: u64, _flags: u32| {
+                //This callback function is called by Vectorscan for each match found during scanning.
+                //It receives the rule_id, from (start index), to (end index), and _flags for each match.
+                //The callback stores these matches in self.user_data.raw_matches_scratch for further processing
+                //
+                //
                 // let start_idx = if from == vectorscan_sys::HS_OFFSET_PAST_HORIZON { 0 } else { from };
                 //
                 // NOTE: `from` is only going to be meaningful here if we start compiling rules
@@ -141,6 +152,8 @@ impl<'a> Matcher<'a> {
                     start_idx,
                     end_idx: to,
                 });
+                //The callback returns vectorscan_rs::Scan::Continue, indicating 
+                //  that Vectorscan should continue scanning for more matches.
                 vectorscan_rs::Scan::Continue
             })?;
         Ok(())
@@ -158,6 +171,8 @@ impl<'a> Matcher<'a> {
     /// multiple times.
     ///
     /// However, only a single `ScanResult::New` result will be returned in such a case.
+    ///
+    ///  // Scan a blob for matches
     pub fn scan_blob<'b>(
         &mut self,
         blob: &'b Blob,
@@ -173,6 +188,7 @@ impl<'a> Matcher<'a> {
         let nbytes: u64 = blob.bytes.len().try_into().unwrap();
         self.local_stats.bytes_seen += nbytes;
 
+        // Check if blob was already scanned
         if let Some(had_matches) = self.seen_blobs.get(&blob.id) {
             // debug!("Blob {} already seen; skipping", &blob.id);
             return Ok(if had_matches {
@@ -182,11 +198,12 @@ impl<'a> Matcher<'a> {
             });
         }
 
+        // Update statistics for new blob
         self.local_stats.blobs_scanned += 1;
         self.local_stats.bytes_scanned += nbytes;
 
         // -----------------------------------------------------------------------------------------
-        // Actually scan the content
+        // Perform the actual scan using Vectorscan
         // -----------------------------------------------------------------------------------------
         self.scan_bytes_raw(&blob.bytes)?;
 
@@ -203,7 +220,7 @@ impl<'a> Matcher<'a> {
         }
 
         // -----------------------------------------------------------------------------------------
-        // Update rule raw match stats
+        // Update rule statistics if profiling is enabled
         // -----------------------------------------------------------------------------------------
         #[cfg(feature = "rule_profiling")]
         for m in raw_matches_scratch.iter() {
@@ -217,6 +234,7 @@ impl<'a> Matcher<'a> {
         //
         // Also deduplicate overlapping matches with the same rule, keeping only the longest match
         // -----------------------------------------------------------------------------------------
+        // Sort and deduplicate raw matches
         raw_matches_scratch.sort_by_key(|m| {
             debug_assert!(m.start_idx <= m.end_idx);
             (m.rule_id, m.end_idx, m.end_idx - m.start_idx)
@@ -228,6 +246,7 @@ impl<'a> Matcher<'a> {
         let mut previous: Option<(usize, OffsetSpan)> = None;
         // note that we walk _backwards_ over the raw matches: this allows us to detect and
         // suppress overlapping matches in a single pass
+        // Perform second-stage regex matching for precise results
         let matches: Vec<_> = raw_matches_scratch.iter().rev()
             .filter_map(|&RawMatch{ rule_id, start_idx, end_idx }| {
                 let rule_id: usize = rule_id.try_into().unwrap();
@@ -278,6 +297,7 @@ impl<'a> Matcher<'a> {
                 }
 
                 // Not a duplicate! Turn the RawMatch into a BlobMatch
+                //Creating BlobMatch instances for the final results
                 let m = BlobMatch {
                     rule,
                     blob,
@@ -288,6 +308,7 @@ impl<'a> Matcher<'a> {
                 previous = Some((rule_id, matching_input_offset_span));
                 Some(m)
             }).collect();
+            // Return the scan result
         Ok(match self.seen_blobs.insert(blob.id, !matches.is_empty()) {
             None => ScanResult::New(matches),
 
