@@ -2,11 +2,13 @@ use anyhow::{bail, Context, Result};
 use bstr::BString;
 use polodb_core::bson::{doc, Bson, Document};
 use polodb_core::{Collection, Database};
-use std::str::FromStr;
-use tracing::{debug, debug_span, info};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
+use tracing::{debug, debug_span, info};
 
-use crate::blob_id::BlobId;
+use crate::blob_id::BlobId; 
 use crate::blob_metadata::BlobMetadata;
 use crate::git_url::GitUrl;
 use crate::location::{Location, OffsetSpan, SourcePoint, SourceSpan};
@@ -14,7 +16,6 @@ use crate::match_type::{Groups, Match};
 use crate::target::Target;
 use crate::target_set::TargetSet;
 use crate::snippet::Snippet;
-use crate::datastore::status::{Status, Statuses};
 
 pub mod annotation;
 pub mod finding_data;
@@ -26,9 +27,13 @@ pub use annotation::{Annotations, FindingAnnotation, MatchAnnotation};
 pub use finding_data::{FindingData, FindingDataEntry};
 pub use finding_metadata::FindingMetadata;
 pub use finding_summary::{FindingSummary, FindingSummaryEntry};
+pub use status::{Status, Statuses};
+
+// const CURRENT_SCHEMA_VERSION: u64 = 60;
 
 pub struct Datastore {
     pub db: Database,
+    // pub root_dir: PathBuf,
 }
 
 impl Datastore {
@@ -36,9 +41,79 @@ impl Datastore {
         let db = Database::open_memory().context("Failed to open in-memory database")?;
         Ok(Datastore { db })
     }
+    
+    // pub fn create_or_open(root_dir: &Path) -> Result<Self> {
+    //     debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
+
+    //     Self::create(root_dir).or_else(|e| {
+    //         debug!("Failed to create datastore: {e:#}: will try to open existing datastore instead");
+    //         Self::open(root_dir)
+    //     })
+    // }
+
+    // pub fn open(root_dir: &Path) -> Result<Self> {
+    //     debug!("Attempting to open existing datastore at {}", root_dir.display());
+        
+    //     let db = Database::open_file(root_dir.join("datastore.polo").to_str().unwrap()).context("Failed to open database")?;
+    //     let ds = Self { db, root_dir: root_dir.to_path_buf() };
+
+    //     let scratch_dir = ds.scratch_dir();
+    //     std::fs::create_dir_all(&scratch_dir).with_context(|| {
+    //         format!("Failed to create scratch directory {}", scratch_dir.display())
+    //     })?;
+
+    //     let clones_dir = ds.clones_dir();
+    //     std::fs::create_dir_all(&clones_dir).with_context(|| {
+    //         format!("Failed to create clones directory {}", clones_dir.display())
+    //     })?;
+
+    //     let blobs_dir = ds.blobs_dir();
+    //     std::fs::create_dir_all(&blobs_dir).with_context(|| {
+    //         format!("Failed to create blobs directory {}", blobs_dir.display())
+    //     })?;
+
+    //     Ok(ds)
+    // }
+
+    // pub fn create(root_dir: &Path) -> Result<Self> {
+    //     debug!("Attempting to create new datastore at {}", root_dir.display());
+
+    //     std::fs::create_dir(root_dir).with_context(|| {
+    //         format!("Failed to create datastore root directory at {}", root_dir.display())
+    //     })?;
+
+    //     std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
+    //         format!("Failed to write .gitignore to datastore at {}", root_dir.display())
+    //     })?;
+
+    //     let db = Database::open_file(root_dir.join("datastore.polo").to_str().unwrap()).context("Failed to open database")?;
+    //     let ds = Self { db, root_dir: root_dir.to_path_buf() };
+
+    //     Ok(ds)
+    // }
+
+    // pub fn scratch_dir(&self) -> PathBuf {
+    //     self.root_dir.join("scratch")
+    // }
+
+    // pub fn clones_dir(&self) -> PathBuf {
+    //     self.root_dir.join("clones")
+    // }
+
+    // pub fn blobs_dir(&self) -> PathBuf {
+    //     self.root_dir.join("blobs")
+    // }
+
+    // pub fn root_dir(&self) -> &Path {
+    //     &self.root_dir
+    // }
+
+    // pub fn clone_destination(&self, repo: &GitUrl) -> Result<PathBuf> {
+    //     clone_destination(&self.clones_dir(), repo)
+    // }
 
     pub fn analyze(&self) -> Result<()> {
-        let _span = debug_span!("Datastore::analyze").entered();
+        let _span = debug_span!("Datastore::analyze");
         
         let matches_collection: Collection<Document> = self.db.collection("matches");
         let findings_collection: Collection<Document> = self.db.collection("findings");
@@ -58,7 +133,7 @@ impl Datastore {
             let rule_name = match_data.get_str("rule_name").unwrap_or("Unknown Rule");
             let rule_text_id = match_data.get_str("rule_text_id").unwrap_or("");
             let rule_structural_id = match_data.get_str("rule_structural_id").unwrap_or("");
-            let finding_id = match_data.get_str("finding_id").unwrap_or("");
+            let finding_id = match_data.get_str("finding_id").unwrap_or(""); //todo: this is always empty
     
             let key = (rule_name.to_string(), rule_structural_id.to_string(), finding_id.to_string());
             findings_map.entry(key).or_insert_with(Vec::new).push(doc);
@@ -251,7 +326,7 @@ impl Datastore {
                         "rule_text_id": &ma.rule_text_id,
                         "rule_structural_id": ma.rule_structural_id.clone(),
                         "match_id": ma.match_id.clone(),
-                        "blob_id": Bson::from(ma.blob_id.clone()),
+                        "blob_id": Bson::try_from(ma.blob_id.clone()).expect("Failed to convert BlobId to Bson"),
                         "start_byte": ma.start_byte as i64,
                         "end_byte": ma.end_byte as i64,
                         "groups": Bson::from(ma.groups.clone()),
@@ -276,49 +351,170 @@ impl Datastore {
 
     pub fn get_finding_metadata(&self) -> Result<Vec<FindingMetadata>> {
         let _span = debug_span!("Datastore::get_finding_metadata").entered();
-
+    
         let collection: Collection<Document> = self.db.collection("findings");
-
+    
         let count = collection.count_documents()?;
         debug!("Number of documents in 'findings' collection: {}", count);
-
+    
+        let matches_collection: Collection<Document> = self.db.collection("matches");
+        let matches_count = matches_collection.count_documents()?;
+        debug!("Number of documents in 'matches' collection: {}", matches_count);
+    
         let cursor = collection.find(doc! {})?;
         let mut entries = vec![];
-
+    
         for result in cursor {
             let doc = result?;
             let entry = FindingMetadata {
                 finding_id: doc.get_str("finding_id")?.to_string(),
-                groups: Groups::from(doc.get_array("groups")?.clone()),
-                rule_structural_id: doc.get_str("rule_structural_id")?.to_string(),
-                rule_text_id: doc.get_str("rule_text_id")?.to_string(),
-                rule_name: doc.get_str("rule_name")?.to_string(),
-                num_matches: doc.get_i64("num_matches")? as usize,
+                groups: doc.get_array("groups")
+                    .map(|arr| Groups::from(arr.clone()))
+                    .unwrap_or_else(|_| Groups::default()),
+                rule_structural_id: doc.get_str("rule_structural_id").unwrap_or("").to_string(),
+                rule_text_id: doc.get_str("rule_text_id").unwrap_or("").to_string(),
+                rule_name: doc.get_str("rule_name").unwrap_or("").to_string(),
+                num_matches: doc.get_i64("num_matches").unwrap_or(0) as usize,
                 comment: doc.get_str("comment").map(|s| s.to_string()).ok(),
-                statuses: Statuses::from(doc.get_array("statuses")?.clone()),
+                statuses: doc.get_array("statuses")
+                    .map(|arr| Statuses::from(arr.clone()))
+                    .unwrap_or_else(|_| Statuses::default()),
                 mean_score: doc.get_f64("mean_score").ok(),
             };
             entries.push(entry);
         }
-
+    
         Ok(entries)
     }
+
+    // pub fn get_finding_data(
+    //     &self,
+    //     metadata: &FindingMetadata,
+    // ) -> Result<FindingData> {
+    //     let _span = debug_span!("Datastore::get_finding_data").entered();
+    
+    //     let collection: Collection<Document> = self.db.collection("matches");
+    
+    //     let groups_query = if metadata.groups.0.is_empty() {
+    //         doc! {
+    //             "rule_structural_id": &metadata.rule_structural_id,
+    //         }
+    //     } else {
+    //         doc! {
+    //             "rule_structural_id": &metadata.rule_structural_id,
+    //             "groups": {
+    //                 "$in": metadata.groups.0.iter().map(|g| Bson::String(String::from_utf8_lossy(&g.0).into_owned())).collect::<Vec<Bson>>()
+    //             }
+    //         }
+    //     };
+    
+    //     let cursor = collection.find(groups_query)?;
+    
+    //     let mut entries = vec![];
+    //     for result in cursor {
+    //         let doc = result?;
+    //         let m = Match {
+    //             blob_id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
+    //             location: Location {
+    //                 offset_span: OffsetSpan {
+    //                     start: doc.get_i64("start_byte")? as usize,
+    //                     end: doc.get_i64("end_byte")? as usize,
+    //                 },
+    //                 source_span: SourceSpan {
+    //                     start: SourcePoint {
+    //                         line: doc.get_i64("start_line")? as usize,
+    //                         column: doc.get_i64("start_column")? as usize,
+    //                     },
+    //                     end: SourcePoint {
+    //                         line: doc.get_i64("end_line")? as usize,
+    //                         column: doc.get_i64("end_column")? as usize,
+    //                     },
+    //                 },
+    //             },
+    //             snippet: Snippet {
+    //                 before: BString::new(doc.get_binary_generic("snippet_before")?.to_vec()),
+    //                 matching: BString::new(doc.get_binary_generic("snippet_matching")?.to_vec()),
+    //                 after: BString::new(doc.get_binary_generic("snippet_after")?.to_vec()),
+    //             },
+    //             groups: Groups::from(doc.get_array("groups")?.clone()),
+    //             rule_structural_id: doc.get_str("rule_structural_id")?.to_string(),
+    //             rule_name: metadata.rule_name.clone(),
+    //             rule_text_id: metadata.rule_text_id.clone(),
+    //             structural_id: doc.get_str("structural_id")?.to_string(),
+    //         };
+    
+    //         let blob_metadata = BlobMetadata {
+    //             id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
+    //             num_bytes: doc.get_i64("num_bytes")? as usize,
+    //             mime_essence: doc.get_str("mime_essence").map(|s| s.to_string()).ok(),
+    //             charset: doc.get_str("charset").map(|s| s.to_string()).ok(),
+    //         };
+    
+    //         let entry = FindingDataEntry {
+    //             target: self.get_target_set(&blob_metadata)?,
+    //             blob_metadata,
+    //             match_id: doc.get_str("match_id")?.to_string(),
+    //             match_val: m,
+    //             match_comment: doc.get_str("comment").map(|s| s.to_string()).ok(),
+    //             match_score: doc.get_f64("score").ok(),
+    //             match_status: match doc.get_str("status") {
+    //                 Ok(s) => Some(Status::from_str(s).expect("Invalid status")),
+    //                 Err(_) => None,
+    //             },
+    //         };
+    
+    //         entries.push(entry);
+    //     }
+    
+    //     Ok(entries)
+    // }
+    
+    // fn get_target_set(&self, metadata: &BlobMetadata) -> Result<TargetSet> {
+    //     let collection: Collection<Document> = self.db.collection("blob_targets");
+    //     let cursor = collection.find(doc! { "blob_id": Bson::try_from(metadata.id).unwrap_or_else(|e| panic!("Failed to convert BlobId to Bson: {}", e)) })?;
+    //     let mut targets = vec![];
+
+    //     for result in cursor {
+    //         let doc = result?;
+    //         let target_str = doc.get_str("target")?;
+    //         let target = Target::from_str(target_str).expect("Invalid Target");
+    //         targets.push(target);
+    //     }
+
+    //     match TargetSet::try_from_iter(targets) {
+    //         Some(ts) => Ok(ts),
+    //         None => bail!("should have at least 1 target entry"),
+    //     }
+    // }
 
     pub fn get_finding_data(
         &self,
         metadata: &FindingMetadata,
+        limit: Option<usize>,
     ) -> Result<FindingData> {
         let _span = debug_span!("Datastore::get_finding_data").entered();
-
+    
         let collection: Collection<Document> = self.db.collection("matches");
-
-        let cursor = collection.find(doc! {
-            "groups": Bson::from(metadata.groups.clone()),
-            "rule_structural_id": metadata.rule_structural_id.clone()
-        })?;
-
+    
+        let groups_query = if metadata.groups.0.is_empty() {
+            doc! {
+                "rule_structural_id": &metadata.rule_structural_id,
+            }
+        } else {
+            doc! {
+                "rule_structural_id": &metadata.rule_structural_id,
+                "groups": {
+                    "$in": metadata.groups.0.iter().map(|g| Bson::String(String::from_utf8_lossy(&g.0).into_owned())).collect::<Vec<Bson>>()
+                }
+            }
+        };
+    
+        let cursor = collection.find(groups_query)?;
+    
+        let match_limit = limit.unwrap_or(usize::MAX);
+    
         let mut entries = vec![];
-        for result in cursor {
+        for result in cursor.take(match_limit) {
             let doc = result?;
             let m = Match {
                 blob_id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
@@ -349,14 +545,14 @@ impl Datastore {
                 rule_text_id: metadata.rule_text_id.clone(),
                 structural_id: doc.get_str("structural_id")?.to_string(),
             };
-
+    
             let blob_metadata = BlobMetadata {
                 id: BlobId::from_hex(doc.get_str("blob_id")?).expect("Invalid BlobId hex string"),
                 num_bytes: doc.get_i64("num_bytes")? as usize,
                 mime_essence: doc.get_str("mime_essence").map(|s| s.to_string()).ok(),
                 charset: doc.get_str("charset").map(|s| s.to_string()).ok(),
             };
-
+    
             let entry = FindingDataEntry {
                 target: self.get_target_set(&blob_metadata)?,
                 blob_metadata,
@@ -369,28 +565,31 @@ impl Datastore {
                     Err(_) => None,
                 },
             };
-
+    
             entries.push(entry);
         }
-
-        Ok(entries)
+    
+        Ok(entries)  // Return the Vec<FindingDataEntry> directly
     }
-
+    
     fn get_target_set(&self, metadata: &BlobMetadata) -> Result<TargetSet> {
         let collection: Collection<Document> = self.db.collection("blob_targets");
-        let cursor = collection.find(doc! { "blob_id": Bson::from(metadata.id) })?;
+        let cursor = collection.find(doc! { "blob_id": Bson::try_from(metadata.id).unwrap_or_else(|e| panic!("Failed to convert BlobId to Bson: {}", e)) })?;
         let mut targets = vec![];
-
+    
         for result in cursor {
             let doc = result?;
             let target_str = doc.get_str("target")?;
             let target = Target::from_str(target_str).expect("Invalid Target");
             targets.push(target);
         }
-
+    
         match TargetSet::try_from_iter(targets) {
             Some(ts) => Ok(ts),
             None => bail!("should have at least 1 target entry"),
         }
     }
-}
+}    
+// fn clone_destination(root: &std::path::Path, repo: &GitUrl) -> Result<std::path::PathBuf> {
+//     Ok(root.join(repo.to_path_buf()))
+// }

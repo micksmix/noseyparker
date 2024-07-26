@@ -2,7 +2,7 @@ use serde_sarif::sarif;
 
 use super::*;
 
-impl DetailsReporter {
+impl<'a> DetailsReporter<'a> {
     fn make_sarif_result(&self, finding: &Finding) -> Result<sarif::Result> {
         let matches = &finding.matches;
         let metadata = &finding.metadata;

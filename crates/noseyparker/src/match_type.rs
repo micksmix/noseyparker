@@ -81,7 +81,7 @@ mod bson {
 // -------------------------------------------------------------------------------------------------
 // Match
 // -------------------------------------------------------------------------------------------------
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Match {
     /// The blob this match comes from
     pub blob_id: BlobId,
@@ -213,4 +213,5 @@ impl Match {
             .expect("should be able to serialize groups as JSON");
         h.hexdigest()
     }
+    
 }

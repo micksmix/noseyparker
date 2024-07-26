@@ -15,6 +15,7 @@ use crate::{args, rule_loader::RuleLoader};
 use content_guesser::Guesser;
 use input_enumerator::{open_git_repo, FileResult, FilesystemEnumerator};
 use progress::Progress;
+use std::sync::Arc;
 
 use noseyparker::blob::{Blob, BlobId};
 use noseyparker::blob_id_map::BlobIdMap;
@@ -34,12 +35,17 @@ use noseyparker::rules_database::RulesDatabase;
 use std::path::PathBuf;
 use std::path::Path;
 
+//reporting
+// use crate::cmd_report;
+use crate::args::{ReportArgs, ReportOutputFormat, ReportFilterArgs};
+
 type DatastoreMessage = (TargetSet, BlobMetadata, Vec<(Option<f64>, Match)>);
 
 /// This command scans multiple filesystem inputs for secrets.
 /// The implementation enumerates content in parallel, scans the enumerated content in parallel,
 /// and records found matches to a SQLite database from a single dedicated thread.
-pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> {
+// pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> {
+pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs,datastore: Arc<Datastore>) -> Result<()> {
     args::validate_github_api_url(
         &args.input_specifier_args.github_api_url,
         args.input_specifier_args.all_github_organizations,
@@ -64,7 +70,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
     // Open in-memory datastore
     // ---------------------------------------------------------------------------------------------
     init_progress.set_message("Initializing in-memory datastore...");
-    let datastore = Datastore::new_in_memory().context("Failed to open in-memory database")?;
+    // let datastore = Datastore::new_in_memory().context("Failed to open in-memory database")?;
 
     // ---------------------------------------------------------------------------------------------
     // Load rules
@@ -341,8 +347,10 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
 
     // Create a separate thread for writing matches to the datastore.
     let datastore_writer_thread = std::thread::Builder::new()
-        .name("datastore".to_string())
-        .spawn(move || -> Result<_> {
+    .name("datastore".to_string())
+    .spawn({
+        let datastore = datastore.clone();
+        move || -> Result<_> {
             let _span = error_span!("datastore").entered();
             let mut total_recording_time: std::time::Duration = Default::default();
 
@@ -366,6 +374,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                 {
                     let t1 = std::time::Instant::now();
                     let batch_len = batch.len();
+                    //todo: mick look here -
                     let num_added = record_batch(&collection, &batch)
                         .context("Failed to record batch")?;
                     last_commit_time = Instant::now();
@@ -410,9 +419,18 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             );
 
             Ok((datastore, num_matches, num_matches_added))
-        })?;
+        }
+    })?;
+
 
     fn record_batch(collection: &Collection<Document>, batch: &[DatastoreMessage]) -> Result<u64> {
+
+        // let mut record_blob_metadata = self.mk_record_blob_metadata()?;
+        // let mut record_provenance = self.mk_record_provenance()?;
+        // let mut record_match = self.mk_record_match()?;
+
+
+
         let mut num_added = 0;
         for message in batch {
             let (target, blob_metadata, matches) = message;
@@ -488,6 +506,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             "rule_name": match_data.rule_name.clone(),
             "rule_text_id": match_data.rule_text_id.clone(),
             "structural_id": match_data.structural_id.clone(),
+            "finding_id": match_data.finding_id(),
         };
     
         if let Some(s) = score {
@@ -768,6 +787,7 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
             println!();
             table.print_tty(global_args.use_color(std::io::stdout()))?;
         }
+
 
         println!("\nRun the `report` command next to show finding details.");
     }

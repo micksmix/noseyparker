@@ -1,26 +1,7 @@
 use super::*;
 
-impl DetailsReporter {
-    pub fn human_format<W: std::io::Write>(&self, mut writer: W) -> Result<()> {
-        let group_metadata = self.get_finding_metadata()?;
-        let num_findings = group_metadata.len();
-        for (finding_num, metadata) in group_metadata.into_iter().enumerate() {
-            let finding_num = finding_num + 1;
-            let matches = self.get_matches(&metadata)?;
-            let finding = Finding { metadata, matches };
-            writeln!(
-                &mut writer,
-                "{}",
-                self.style_finding_heading(format!("Finding {finding_num}/{num_findings}"))
-            )?;
-            writeln!(&mut writer, "{}", PrettyFinding(self, &finding))?;
-        }
-        Ok(())
-    }
-}
-
 /// A wrapper type to allow human-oriented pretty-printing of a `Finding`.
-pub struct PrettyFinding<'a>(&'a DetailsReporter, &'a Finding);
+pub struct PrettyFinding<'a>(&'a DetailsReporter<'a>, &'a Finding);
 
 impl<'a> Display for PrettyFinding<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -79,9 +60,11 @@ impl<'a> Display for PrettyFinding<'a> {
                 let group_heading = reporter.style_heading(format!("Group {i}:"));
                 write_group(group_heading, g)?;
             }
-        } else {
+        } else if !gs.is_empty() {
             let group_heading = reporter.style_heading("Group:".into());
             write_group(group_heading, &gs[0])?;
+        } else {
+            writeln!(f, "No groups found for this finding")?;
         }
 
         // write out count if not all matches are displayed
@@ -227,6 +210,25 @@ impl<'a> Display for PrettyFinding<'a> {
             writeln!(f)?;
         }
 
+        Ok(())
+    }
+}
+
+impl<'a> DetailsReporter<'a> {
+    pub fn human_format<W: std::io::Write>(&self, mut writer: W) -> Result<()> {
+        let group_metadata = self.get_finding_metadata()?;
+        let num_findings = group_metadata.len();
+        for (finding_num, metadata) in group_metadata.into_iter().enumerate() {
+            let finding_num = finding_num + 1;
+            let matches = self.get_matches(&metadata)?;
+            let finding = Finding { metadata, matches };
+            writeln!(
+                &mut writer,
+                "{}",
+                self.style_finding_heading(format!("Finding {finding_num}/{num_findings}"))
+            )?;
+            writeln!(&mut writer, "{}", PrettyFinding(self, &finding))?;
+        }
         Ok(())
     }
 }

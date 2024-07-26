@@ -47,10 +47,10 @@ impl FindingSummaryReporter {
     }
 }
 
-pub fn run(global_args: &GlobalArgs, args: &SummarizeArgs) -> Result<()> {
+pub fn run(global_args: &GlobalArgs, args: &SummarizeArgs, datastore: &Datastore) -> Result<()> {
     // Initialize in-memory datastore
-    let db = Database::open_memory().context("Failed to open in-memory database")?;
-    let datastore = Datastore::new_in_memory()?;
+    // let db = Database::open_memory().context("Failed to open in-memory database")?;
+    // let datastore = Datastore::new_in_memory()?;
 
     let output = args
         .output_args

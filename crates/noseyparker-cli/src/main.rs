@@ -7,6 +7,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
+use std::sync::Arc;
 
 mod args;
 mod cmd_datastore;
@@ -21,6 +22,7 @@ mod rule_loader;
 mod util;
 
 use args::{CommandLineArgs, GlobalArgs};
+use noseyparker::datastore::Datastore;
 
 /// Set up the logging / tracing system for the application.
 fn configure_tracing(global_args: &GlobalArgs) -> Result<()> {
@@ -110,16 +112,38 @@ fn try_main(args: &CommandLineArgs) -> Result<()> {
         warn!("Failed to initialize resource limits: {e}");
     }
 
+    // Create a single Datastore instance
+    // let datastore = Datastore::new_in_memory().context("Failed to create in-memory datastore")?;
+
+    let datastore = Arc::new(Datastore::new_in_memory()?);
+// run(&global_args, &args, datastore.clone())?;
     match &args.command {
-        args::Command::Scan(scan_args) => cmd_scan::run(&global_args, scan_args),
-        args::Command::Summarize(summarize_args) => cmd_summarize::run(&global_args, summarize_args),
-        args::Command::Report(report_args) => cmd_report::run(&global_args, report_args),
+        args::Command::Scan(scan_args) => {
+            let result = cmd_scan::run(&global_args, scan_args, datastore.clone());
+            if result.is_ok() {
+                // Automatically run report after successful scan
+                let report_args = args::ReportArgs {
+                    output_args: args::OutputArgs {
+                        format: args::ReportOutputFormat::Human,
+                        output: None,
+                    },
+                    filter_args: args::ReportFilterArgs {
+                        max_matches: -1,
+                        min_score: 0.0,
+                        finding_status: None,
+                    },
+                };
+                cmd_report::run(&global_args, &report_args, &datastore)?; //todo: mick look here
+            }
+            result
+        },
+        args::Command::Summarize(summarize_args) => cmd_summarize::run(&global_args, summarize_args, &datastore),
+        args::Command::Report(report_args) => cmd_report::run(&global_args, report_args, &datastore),
         args::Command::Generate(generate_args) => cmd_generate::run(&global_args, generate_args),
         args::Command::Datastore(datastore_args) => cmd_datastore::run(&global_args, datastore_args),
         _ => todo!(), // Handle other commands or provide a default case
     }
 }
-
 fn main() {
     let args = &CommandLineArgs::parse_args();
     if let Err(e) = try_main(args) {

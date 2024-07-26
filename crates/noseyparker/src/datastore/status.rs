@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use smallvec::smallvec;
 use std::fmt;
 use std::str::FromStr;
 
@@ -15,6 +16,13 @@ use std::str::FromStr;
 pub enum Status {
     Accept,
     Reject,
+}
+
+
+impl Default for Statuses {
+    fn default() -> Self {
+        Statuses(smallvec![])
+    }
 }
 
 impl fmt::Display for Status {

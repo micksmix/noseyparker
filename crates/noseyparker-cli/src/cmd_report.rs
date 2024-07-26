@@ -27,10 +27,9 @@ mod styles;
 
 use styles::{StyledObject, Styles};
 
-pub fn run(global_args: &GlobalArgs, args: &ReportArgs) -> Result<()> {
+pub fn run(global_args: &GlobalArgs, args: &ReportArgs, datastore: &Datastore) -> Result<()> {
     // Initialize in-memory datastore
-    // let db = Database::open_memory().context("Failed to open in-memory database")?;
-    let datastore = Datastore::new_in_memory()?;
+    //let db = Database::open_memory().context("Failed to open in-memory database")?;
 
     let output = args
         .output_args
@@ -70,8 +69,8 @@ pub fn run(global_args: &GlobalArgs, args: &ReportArgs) -> Result<()> {
     reporter.report(args.output_args.format, output)
 }
 
-struct DetailsReporter {
-    datastore: Datastore,
+struct DetailsReporter<'a> {
+    datastore: &'a Datastore,
     max_matches: Option<usize>,
     min_score: Option<f64>,
     finding_status: Option<FindingStatus>,
@@ -90,85 +89,110 @@ fn statuses_match(requested_status: FindingStatus, statuses: &[Status]) -> bool 
     )
 }
 
-impl DetailsReporter {
-    /// Get the metadata for all the findings that remain after filtering.
+impl<'a> DetailsReporter<'a> {
     fn get_finding_metadata(&self) -> Result<Vec<FindingMetadata>> {
-        let datastore = &self.datastore;
+        let datastore = self.datastore;
         let mut group_metadata = datastore
             .get_finding_metadata()
             .context("Failed to get match group metadata from datastore")?;
 
-        // How many findings were suppressed due to their status not matching?
-        let mut num_suppressed_for_status: usize = 0;
-
-        // How many findings were suppressed due to their status not matching?
-        let mut num_suppressed_for_score: usize = 0;
-
-        // Suppress findings with non-matching status
+        // Use iterators to avoid unnecessary allocations
         if let Some(status) = self.finding_status {
-            group_metadata.retain(|md| {
-                if statuses_match(status, md.statuses.0.as_slice()) {
-                    true
-                } else {
-                    num_suppressed_for_status += 1;
-                    false
-                }
-            })
+            group_metadata.retain(|md| statuses_match(status, md.statuses.0.as_slice()));
         }
 
-        // Suppress findings with non-matching score
         if let Some(min_score) = self.min_score {
-            group_metadata.retain(|md| match md.mean_score {
-                Some(mean_score) if mean_score < min_score => {
-                    num_suppressed_for_score += 1;
-                    false
+            group_metadata.retain(|md| {
+                match md.mean_score {
+                    Some(mean_score) => mean_score >= min_score,
+                    None => false,
                 }
-                _ => true,
-            })
-        }
-
-        if num_suppressed_for_status > 0 {
-            let finding_status = self.finding_status.unwrap();
-
-            if num_suppressed_for_status == 1 {
-                info!(
-                    "Note: 1 finding with status not matching {finding_status} was suppressed; \
-                       rerun without `--finding-status={finding_status}` to show it"
-                );
-            } else {
-                info!(
-                    "Note: {num_suppressed_for_status} findings with status not matching \
-                       `{finding_status}` were suppressed; \
-                       rerun without `--finding-status={finding_status}` to show them"
-                );
-            }
-        }
-
-        if num_suppressed_for_score > 0 {
-            let min_score = self.min_score.unwrap();
-
-            if num_suppressed_for_status == 1 {
-                info!(
-                    "Note: 1 finding with meanscore less than {min_score} was suppressed; \
-                       rerun with `--min-score=0` to show it"
-                );
-            } else {
-                info!(
-                    "Note: {num_suppressed_for_score} findings with mean score less than \
-                       {min_score} were suppressed; \
-                       rerun with `--min-score=0` to show them"
-                );
-            }
+            });
         }
 
         Ok(group_metadata)
     }
 
+
+// impl<'a> DetailsReporter<'a> {
+//     /// Get the metadata for all the findings that remain after filtering.
+//     fn get_finding_metadata(&self) -> Result<Vec<FindingMetadata>> {
+//         let datastore = self.datastore;
+//         let mut group_metadata = datastore
+//             .get_finding_metadata()
+//             .context("Failed to get match group metadata from datastore")?;
+
+//         // How many findings were suppressed due to their status not matching?
+//         let mut num_suppressed_for_status: usize = 0;
+
+//         // How many findings were suppressed due to their status not matching?
+//         let mut num_suppressed_for_score: usize = 0;
+
+//         // Suppress findings with non-matching status
+//         if let Some(status) = self.finding_status {
+//             group_metadata.retain(|md| {
+//                 if statuses_match(status, md.statuses.0.as_slice()) {
+//                     true
+//                 } else {
+//                     num_suppressed_for_status += 1;
+//                     false
+//                 }
+//             })
+//         }
+
+//         // Suppress findings with non-matching score
+//         if let Some(min_score) = self.min_score {
+//             group_metadata.retain(|md| match md.mean_score {
+//                 Some(mean_score) if mean_score < min_score => {
+//                     num_suppressed_for_score += 1;
+//                     false
+//                 }
+//                 _ => true,
+//             })
+//         }
+
+//         if num_suppressed_for_status > 0 {
+//             let finding_status = self.finding_status.unwrap();
+
+//             if num_suppressed_for_status == 1 {
+//                 info!(
+//                     "Note: 1 finding with status not matching {finding_status} was suppressed; \
+//                        rerun without `--finding-status={finding_status}` to show it"
+//                 );
+//             } else {
+//                 info!(
+//                     "Note: {num_suppressed_for_status} findings with status not matching \
+//                        `{finding_status}` were suppressed; \
+//                        rerun without `--finding-status={finding_status}` to show them"
+//                 );
+//             }
+//         }
+
+//         if num_suppressed_for_score > 0 {
+//             let min_score = self.min_score.unwrap();
+
+//             if num_suppressed_for_status == 1 {
+//                 info!(
+//                     "Note: 1 finding with meanscore less than {min_score} was suppressed; \
+//                        rerun with `--min-score=0` to show it"
+//                 );
+//             } else {
+//                 info!(
+//                     "Note: {num_suppressed_for_score} findings with mean score less than \
+//                        {min_score} were suppressed; \
+//                        rerun with `--min-score=0` to show them"
+//                 );
+//             }
+//         }
+
+//         Ok(group_metadata)
+//     }
+
     /// Get the matches associated with the given finding.
     fn get_matches(&self, metadata: &FindingMetadata) -> Result<Vec<ReportMatch>> {
         Ok(self
             .datastore
-            .get_finding_data(metadata)
+            .get_finding_data(metadata, None)
             .with_context(|| format!("Failed to get matches for finding {metadata:?}"))
             .expect("should be able to find get matches for finding")
             .into_iter()
@@ -197,7 +221,7 @@ impl DetailsReporter {
     }
 }
 
-impl Reportable for DetailsReporter {
+impl<'a> Reportable for DetailsReporter<'a> {
     type Format = ReportOutputFormat;
 
     fn report<W: std::io::Write>(&self, format: Self::Format, writer: W) -> Result<()> {
@@ -210,7 +234,7 @@ impl Reportable for DetailsReporter {
     }
 }
 
-impl DetailsReporter {
+impl<'a> DetailsReporter<'a> {
     /// Write findings in JSON-like format to `writer`.
     ///
     /// If `begin` is supplied, it is written before any finding is.
