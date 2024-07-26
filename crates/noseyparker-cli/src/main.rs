@@ -7,6 +7,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
+use std::path::PathBuf; 
 
 mod args;
 mod cmd_annotations;
@@ -20,8 +21,10 @@ mod cmd_summarize;
 mod reportable;
 mod rule_loader;
 mod util;
+mod global;
 
 use args::{CommandLineArgs, GlobalArgs};
+
 
 /// Set up the logging / tracing system for the application.
 fn configure_tracing(global_args: &GlobalArgs) -> Result<()> {
@@ -115,13 +118,53 @@ fn try_main(args: &CommandLineArgs) -> Result<()> {
         args::Command::Datastore(args) => cmd_datastore::run(global_args, args),
         args::Command::GitHub(args) => cmd_github::run(global_args, args),
         args::Command::Rules(args) => cmd_rules::run(global_args, args),
-        args::Command::Scan(args) => cmd_scan::run(global_args, args),
+        args::Command::Scan(args) => {
+            cmd_scan::run(global_args, args)?;
+
+            let report_args = args::ReportArgs {
+                datastore: PathBuf::from(":memory:"),
+                filter_args: args::ReportFilterArgs {
+                    max_matches: 3,
+                    min_score: 0.05,
+                    finding_status: None,
+                },
+                output_args: args::OutputArgs {
+                    output: None,
+                    format: args::ReportOutputFormat::Human,
+                },
+            };
+
+            cmd_report::run(global_args, &report_args)
+        }
         args::Command::Summarize(args) => cmd_summarize::run(global_args, args),
         args::Command::Report(args) => cmd_report::run(global_args, args),
         args::Command::Annotations(args) => cmd_annotations::run(global_args, args),
         args::Command::Generate(args) => cmd_generate::run(global_args, args),
     }
 }
+
+// fn try_main(args: &CommandLineArgs) -> Result<()> {
+//     let global_args = &args.global_args;
+
+//     configure_backtraces(global_args);
+//     configure_color(global_args);
+//     configure_tracing(global_args).context("Failed to initialize logging")?;
+
+//     if let Err(e) = configure_rlimits(global_args) {
+//         warn!("Failed to initialize resource limits: {e}");
+//     }
+
+//     match &args.command {
+//         args::Command::Datastore(args) => cmd_datastore::run(global_args, args),
+//         args::Command::GitHub(args) => cmd_github::run(global_args, args),
+//         args::Command::Rules(args) => cmd_rules::run(global_args, args),
+//         args::Command::Scan(args) => cmd_scan::run(global_args, args),
+//         args::Command::Summarize(args) => cmd_summarize::run(global_args, args),
+//         args::Command::Report(args) => cmd_report::run(global_args, args),
+//         args::Command::Annotations(args) => cmd_annotations::run(global_args, args),
+//         args::Command::Generate(args) => cmd_generate::run(global_args, args),
+//     }
+// }
 
 fn main() {
     let args = &CommandLineArgs::parse_args();

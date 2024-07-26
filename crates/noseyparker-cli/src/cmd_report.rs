@@ -4,6 +4,7 @@ use indenter::indented;
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::fmt::{Display, Formatter, Write};
+use std::path::Path;
 use tracing::info;
 
 use noseyparker::blob_metadata::BlobMetadata;
@@ -16,6 +17,7 @@ use noseyparker::provenance_set::ProvenanceSet;
 
 use crate::args::{FindingStatus, GlobalArgs, ReportArgs, ReportOutputFormat};
 use crate::reportable::Reportable;
+use crate::global::DATASTORE_PATH; 
 
 mod human_format;
 mod sarif_format;
@@ -24,8 +26,9 @@ mod styles;
 use styles::{StyledObject, Styles};
 
 pub fn run(global_args: &GlobalArgs, args: &ReportArgs) -> Result<()> {
-    let datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
+    let datastore_path = DATASTORE_PATH.lock().unwrap().clone();
+    let datastore = Datastore::open(&Path::new(&datastore_path), global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open datastore at {}", datastore_path))?;
     let output = args
         .output_args
         .get_writer()

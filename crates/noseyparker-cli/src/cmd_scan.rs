@@ -28,6 +28,7 @@ use noseyparker::matcher_stats::MatcherStats;
 use noseyparker::provenance::Provenance;
 use noseyparker::provenance_set::ProvenanceSet;
 use noseyparker::rules_database::RulesDatabase;
+use crate::global::DATASTORE_PATH; 
 
 type DatastoreMessage = (ProvenanceSet, BlobMetadata, Vec<(Option<f64>, Match)>);
 
@@ -59,11 +60,12 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
     // Open datastore
     // ---------------------------------------------------------------------------------------------
     init_progress.set_message("Initializing datastore...");
-    let mut datastore =
-        Datastore::create_or_open(&args.datastore, global_args.advanced.sqlite_cache_size)
-            .with_context(|| {
-                format!("Failed to open datastore at {}", &args.datastore.display())
-            })?;
+    let datastore_path = DATASTORE_PATH.lock().unwrap().clone();
+    let mut datastore = Datastore::create_or_open(Path::new(&datastore_path), global_args.advanced.sqlite_cache_size)
+        .with_context(|| {
+            format!("Failed to open datastore at {}", datastore_path)
+        })?;
+
 
     // ---------------------------------------------------------------------------------------------
     // Load rules

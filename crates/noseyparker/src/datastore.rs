@@ -35,9 +35,9 @@ pub use status::{Status, Statuses};
 
 /// The source of truth for Nosey Parker findings and runtime state.
 ///
-/// A `Datastore` resides on disk as a directory, and stores a number of things:
+/// A `Datastore` resides in-memory and stores a number of things:
 ///
-/// - A sqlite database for recording findings and scan information
+/// - An SQLite database for recording findings and scan information
 /// - A scratch directory for providing temporary directories and files
 /// - A directory used for storing clones of Git repositories
 ///
@@ -46,7 +46,7 @@ pub use status::{Status, Statuses};
 /// that mediates access to the `Datastore`.
 ///
 /// Accessing a single `Datastore` from multiple processes is untested and may not work correctly.
-/// This implementation has not built-in mechanism to check for or prevent multi-process access.
+/// This implementation has no built-in mechanism to check for or prevent multi-process access.
 pub struct Datastore {
     /// The root directory of everything contained in this `Datastore`.
     root_dir: PathBuf,
@@ -57,10 +57,9 @@ pub struct Datastore {
 
 // Public implementation
 impl Datastore {
-    /// Create a new datastore at `root_dir` if one does not exist,
-    /// or open an existing one if present.
+    /// Create a new datastore in-memory.
     pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
+        debug!("Attempting to create or open an in-memory datastore");
 
         Self::create(root_dir, cache_size).or_else(|e| {
             debug!(
@@ -70,9 +69,9 @@ impl Datastore {
         })
     }
 
-    /// Open the existing datastore at `root_dir`.
+    /// Open the existing datastore.
     pub fn open(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        debug!("Attempting to open existing datastore at {}", root_dir.display());
+        debug!("Attempting to open existing in-memory datastore");
 
         let ds = Self::open_impl(root_dir, cache_size)?;
         ds.check_schema_version()?;
@@ -95,13 +94,13 @@ impl Datastore {
         Ok(ds)
     }
 
-    /// Create a new datastore at `root_dir` and open it.
+    /// Create a new in-memory datastore.
     pub fn create(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        debug!("Attempting to create new datastore at {}", root_dir.display());
+        debug!("Attempting to create new in-memory datastore");
 
-        // Create datastore directory
-        std::fs::create_dir(root_dir).with_context(|| {
-            format!("Failed to create datastore root directory at {}", root_dir.display())
+        // Create scratch, clones, and blobs directories
+        std::fs::create_dir_all(root_dir).with_context(|| {
+            format!("Failed to create directories in datastore root at {}", root_dir.display())
         })?;
 
         // Generate .gitignore file
@@ -142,7 +141,7 @@ impl Datastore {
         clone_destination(&self.clones_dir(), repo)
     }
 
-    /// Analyze the datastore's sqlite database, potentially allowing for better query planning
+    /// Analyze the datastore's SQLite database, potentially allowing for better query planning
     pub fn analyze(&self) -> Result<()> {
         let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
         self.conn.execute("analyze", [])?;
@@ -150,6 +149,129 @@ impl Datastore {
         Ok(())
     }
 }
+
+impl Datastore {
+    fn open_impl(root_dir: &Path, cache_size: i64) -> Result<Self> {
+        let db_path = root_dir.join("datastore.db");
+        let conn = Self::new_connection(&db_path, cache_size)?;
+        let root_dir = root_dir.canonicalize()?;
+        let ds = Self { root_dir, conn };
+        Ok(ds)
+    }
+
+    fn new_connection(path: &Path, cache_size: i64) -> Result<Connection> {
+        let conn = Connection::open(path)?;
+
+        conn.pragma_update(None, "journal_mode", "wal")?; // https://www.sqlite.org/wal.html
+        conn.pragma_update(None, "foreign_keys", "on")?; // https://sqlite.org/foreignkeys.html
+        conn.pragma_update(None, "synchronous", "normal")?; // https://sqlite.org/pragma.html#pragma_synchronous
+        conn.pragma_update(None, "cache_size", cache_size)?; // sqlite.org/pragma.html#pragma_cache_size
+
+        // Initialize the schema
+        conn.execute_batch(CURRENT_SCHEMA).context("Failed to initialize database schema")?;
+        conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
+
+        Ok(conn)
+    }
+    
+}
+
+
+// // Public implementation
+// impl Datastore {
+//     /// Create a new datastore at `root_dir` if one does not exist,
+//     /// or open an existing one if present.
+//     pub fn create_or_open(root_dir: &Path, cache_size: i64) -> Result<Self> {
+//         debug!("Attempting to create or open an existing datastore at {}", root_dir.display());
+
+//         Self::create(root_dir, cache_size).or_else(|e| {
+//             debug!(
+//                 "Failed to create datastore: {e:#}: will try to open existing datastore instead"
+//             );
+//             Self::open(root_dir, cache_size)
+//         })
+//     }
+
+//     /// Open the existing datastore at `root_dir`.
+//     pub fn open(root_dir: &Path, cache_size: i64) -> Result<Self> {
+//         debug!("Attempting to open existing datastore at {}", root_dir.display());
+
+//         let ds = Self::open_impl(root_dir, cache_size)?;
+//         ds.check_schema_version()?;
+
+//         let scratch_dir = ds.scratch_dir();
+//         std::fs::create_dir_all(&scratch_dir).with_context(|| {
+//             format!("Failed to create scratch directory {}", scratch_dir.display(),)
+//         })?;
+
+//         let clones_dir = ds.clones_dir();
+//         std::fs::create_dir_all(&clones_dir).with_context(|| {
+//             format!("Failed to create clones directory {}", clones_dir.display(),)
+//         })?;
+
+//         let blobs_dir = ds.blobs_dir();
+//         std::fs::create_dir_all(&blobs_dir).with_context(|| {
+//             format!("Failed to create blobs directory {}", blobs_dir.display(),)
+//         })?;
+
+//         Ok(ds)
+//     }
+
+//     /// Create a new datastore at `root_dir` and open it.
+//     pub fn create(root_dir: &Path, cache_size: i64) -> Result<Self> {
+//         debug!("Attempting to create new datastore at {}", root_dir.display());
+
+//         // Create datastore directory
+//         std::fs::create_dir(root_dir).with_context(|| {
+//             format!("Failed to create datastore root directory at {}", root_dir.display())
+//         })?;
+
+//         // Generate .gitignore file
+//         std::fs::write(root_dir.join(".gitignore"), "*\n").with_context(|| {
+//             format!("Failed to write .gitignore to datastore at {}", root_dir.display())
+//         })?;
+
+//         let mut ds = Self::open_impl(root_dir, cache_size)?;
+
+//         ds.migrate_0_60()
+//             .context("Failed to initialize database schema")?;
+
+//         Self::open(root_dir, cache_size)
+//     }
+
+//     /// Get the path to this datastore's scratch directory.
+//     pub fn scratch_dir(&self) -> PathBuf {
+//         self.root_dir.join("scratch")
+//     }
+
+//     /// Get the path to this datastore's clones directory.
+//     pub fn clones_dir(&self) -> PathBuf {
+//         self.root_dir.join("clones")
+//     }
+
+//     /// Get the path to this datastore's blobs directory.
+//     pub fn blobs_dir(&self) -> PathBuf {
+//         self.root_dir.join("blobs")
+//     }
+
+//     /// Get the root directory that contains this `Datastore`.
+//     pub fn root_dir(&self) -> &Path {
+//         &self.root_dir
+//     }
+
+//     /// Get a path for a local clone of the given git URL within this datastore's clones directory.
+//     pub fn clone_destination(&self, repo: &GitUrl) -> Result<std::path::PathBuf> {
+//         clone_destination(&self.clones_dir(), repo)
+//     }
+
+//     /// Analyze the datastore's sqlite database, potentially allowing for better query planning
+//     pub fn analyze(&self) -> Result<()> {
+//         let _span = debug_span!("Datastore::analyze", "{}", self.root_dir.display()).entered();
+//         self.conn.execute("analyze", [])?;
+//         // self.conn.execute("pragma wal_checkpoint(truncate)", [])?;
+//         Ok(())
+//     }
+// }
 
 /// A datastore-specific ID of a blob; simply a newtype-like wrapper around an i64.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1027,24 +1149,24 @@ impl Datastore {
         }
     }
 
-    fn open_impl(root_dir: &Path, cache_size: i64) -> Result<Self> {
-        let db_path = root_dir.join("datastore.db");
-        let conn = Self::new_connection(&db_path, cache_size)?;
-        let root_dir = root_dir.canonicalize()?;
-        let ds = Self { root_dir, conn };
-        Ok(ds)
-    }
+    // fn open_impl(root_dir: &Path, cache_size: i64) -> Result<Self> {
+    //     let db_path = root_dir.join("datastore.db");
+    //     let conn = Self::new_connection(&db_path, cache_size)?;
+    //     let root_dir = root_dir.canonicalize()?;
+    //     let ds = Self { root_dir, conn };
+    //     Ok(ds)
+    // }
 
-    fn new_connection(path: &Path, cache_size: i64) -> Result<Connection> {
-        let conn = Connection::open(path)?;
+    // fn new_connection(path: &Path, cache_size: i64) -> Result<Connection> {
+    //     let conn = Connection::open(path)?;
 
-        conn.pragma_update(None, "journal_mode", "wal")?; // https://www.sqlite.org/wal.html
-        conn.pragma_update(None, "foreign_keys", "on")?; // https://sqlite.org/foreignkeys.html
-        conn.pragma_update(None, "synchronous", "normal")?; // https://sqlite.org/pragma.html#pragma_synchronous
-        conn.pragma_update(None, "cache_size", cache_size)?; // sqlite.org/pragma.html#pragma_cache_size
+    //     conn.pragma_update(None, "journal_mode", "wal")?; // https://www.sqlite.org/wal.html
+    //     conn.pragma_update(None, "foreign_keys", "on")?; // https://sqlite.org/foreignkeys.html
+    //     conn.pragma_update(None, "synchronous", "normal")?; // https://sqlite.org/pragma.html#pragma_synchronous
+    //     conn.pragma_update(None, "cache_size", cache_size)?; // sqlite.org/pragma.html#pragma_cache_size
 
-        Ok(conn)
-    }
+    //     Ok(conn)
+    // }
 
     fn check_schema_version(&self) -> Result<()> {
         let user_version: u64 = self

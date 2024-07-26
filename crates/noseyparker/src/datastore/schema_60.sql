@@ -1,115 +1,115 @@
 --------------------------------------------------------------------------------
 -- blobs
 --------------------------------------------------------------------------------
-CREATE TABLE blob
+CREATE TABLE IF NOT EXISTS blob
 -- This table records basic metadata about blobs.
 (
     -- An arbitrary integer identifier for the blob
-    id integer primary key,
+    id INTEGER PRIMARY KEY,
 
     -- The blob hash, computed a la Git, i.e., a hex digest of a fancy SHA-1 hash
-    blob_id text unique not null,
+    blob_id TEXT UNIQUE NOT NULL,
 
     -- Size of the blob in bytes
-    size integer not null,
+    size INTEGER NOT NULL,
 
-    constraint valid_id check(
-        length(blob_id) == 40 and not glob('*[^abcdefABCDEF1234567890]*', blob_id)
+    CONSTRAINT valid_id CHECK(
+        length(blob_id) == 40 AND NOT glob('*[^abcdefABCDEF1234567890]*', blob_id)
     ),
 
-    constraint valid_size check(0 <= size)
+    CONSTRAINT valid_size CHECK(0 <= size)
 ) STRICT;
 
-CREATE TABLE blob_mime_essence
+CREATE TABLE IF NOT EXISTS blob_mime_essence
 -- This table records mime type metadata about blobs.
 (
     -- The integer identifier of the blob
-    blob_id integer primary key references blob(id),
+    blob_id INTEGER PRIMARY KEY REFERENCES blob(id),
 
     -- Guessed mime type of the blob
-    mime_essence text not null
+    mime_essence TEXT NOT NULL
 ) STRICT;
 
-CREATE TABLE blob_charset
+CREATE TABLE IF NOT EXISTS blob_charset
 -- This table records charset metadata about blobs.
 (
     -- The integer identifier of the blob
-    blob_id integer primary key references blob(id),
+    blob_id INTEGER PRIMARY KEY REFERENCES blob(id),
 
     -- Guessed charset encoding of the blob
-    charset text not null
+    charset TEXT NOT NULL
 ) STRICT;
 
-CREATE TABLE blob_source_span
+CREATE TABLE IF NOT EXISTS blob_source_span
 -- This table represents source span-based location information for ranges within blobs.
 -- This allows you to look up line and column information given a (start byte, end byte) range.
 (
-    blob_id integer not null references blob(id),
-    start_byte integer not null,
-    end_byte integer not null,
+    blob_id INTEGER NOT NULL REFERENCES blob(id),
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
 
-    start_line integer not null,
-    start_column integer not null,
-    end_line integer not null,
-    end_column integer not null,
+    start_line INTEGER NOT NULL,
+    start_column INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    end_column INTEGER NOT NULL,
 
-    unique(blob_id, start_byte, end_byte),
+    UNIQUE(blob_id, start_byte, end_byte),
 
-    constraint valid_offsets check(0 <= start_byte and start_byte <= end_byte),
+    CONSTRAINT valid_offsets CHECK(0 <= start_byte AND start_byte <= end_byte),
 
-    constraint valid_span check(0 <= start_line
-        and start_line <= end_line
-        and 0 <= start_column
-        and 0 <= end_column
+    CONSTRAINT valid_span CHECK(0 <= start_line
+        AND start_line <= end_line
+        AND 0 <= start_column
+        AND 0 <= end_column
     )
 ) STRICT;
 
-CREATE TABLE blob_provenance
+CREATE TABLE IF NOT EXISTS blob_provenance
 -- This table records the various ways in which blobs were encountered.
 -- A blob can be encountered multiple ways when scanning; this table records all of them.
 (
     -- The integer identifier of the blob
-    blob_id integer not null references blob(id),
+    blob_id INTEGER NOT NULL REFERENCES blob(id),
 
     -- The minified JSON-formatted provenance information
     -- XXX: deduplicate these values via another table?
     -- XXX: allow recursive representation of provenance values? I.e., structural decomposition and sharing, like `git repo` -> `commit` -> `blob path`?
     -- XXX: define special JSON object fields that will be handled specially by NP? E.g., `path`, `repo_path`, ...?
-    provenance text not null,
+    provenance TEXT NOT NULL,
 
-    unique(blob_id, provenance),
+    UNIQUE(blob_id, provenance),
 
-    constraint payload_valid check(json_type(provenance) = 'object')
+    CONSTRAINT payload_valid CHECK(json_type(provenance) = 'object')
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- rules
 --------------------------------------------------------------------------------
-CREATE TABLE rule
+CREATE TABLE IF NOT EXISTS rule
 -- This table records rules used for detection.
 (
     -- An arbitrary integer identifier for the rule
-    id integer primary key,
+    id INTEGER PRIMARY KEY,
 
     -- The human-readable name of the rule
-    name text not null,
+    name TEXT NOT NULL,
 
     -- The textual identifier defined in the rule
-    text_id text not null,
+    text_id TEXT NOT NULL,
 
     -- A content-based identifier, defined as the hex-encoded sha1 hash of the pattern.
-    structural_id text unique not null,
+    structural_id TEXT UNIQUE NOT NULL,
 
     -- The minified JSON serialization of the rule
-    syntax text not null,
+    syntax TEXT NOT NULL,
 
-    constraint json_syntax_valid check(json_type(syntax) = 'object')
+    CONSTRAINT json_syntax_valid CHECK(json_type(syntax) = 'object')
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- snippets
 --------------------------------------------------------------------------------
-CREATE TABLE snippet
+CREATE TABLE IF NOT EXISTS snippet
 -- This table represents contextual snippets in a deduplicated way.
 --
 -- Deduplication of snippets reduces the size of large datastores 20-100x or more.
@@ -117,16 +117,16 @@ CREATE TABLE snippet
 -- snippets of matches when scanning using a larger context window.
 (
     -- An arbitrary integer identifier for the snippet
-    id integer primary key,
+    id INTEGER PRIMARY KEY,
 
     -- The snippet content
-    snippet blob unique not null
+    snippet BLOB UNIQUE NOT NULL
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- findings
 --------------------------------------------------------------------------------
-CREATE TABLE finding
+CREATE TABLE IF NOT EXISTS finding
 -- This table represents findings.
 --
 -- A finding is defined as a group of matches that have the same rule and groups.
@@ -136,166 +136,135 @@ CREATE TABLE finding
 -- sha1_hex(rule structural identifier + '\0' + minified JSON array of base64-encoded groups)
 (
     -- An arbitrary integer identifier for the match
-    id integer primary key,
+    id INTEGER PRIMARY KEY,
 
-    finding_id text unique not null,
+    finding_id TEXT UNIQUE NOT NULL,
 
     -- The rule that produced this finding
-    rule_id integer not null references rule(id),
+    rule_id INTEGER NOT NULL REFERENCES rule(id),
 
     -- The capture groups, encoded as a minified JSON array of base64-encoded bytestrings
-    groups text not null,
+    groups TEXT NOT NULL,
 
-    constraint valid_id check(
-        length(finding_id) == 40 and not glob('*[^abcdefABCDEF1234567890]*', finding_id)
+    CONSTRAINT valid_id CHECK(
+        length(finding_id) == 40 AND NOT glob('*[^abcdefABCDEF1234567890]*', finding_id)
     ),
 
-    constraint valid_groups check(json_type(groups) = 'array'),
+    CONSTRAINT valid_groups CHECK(json_type(groups) = 'array'),
 
-    unique(rule_id, groups)
+    UNIQUE(rule_id, groups)
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- matches
 --------------------------------------------------------------------------------
-CREATE TABLE match
+CREATE TABLE IF NOT EXISTS match
 -- This table represents the matches found from scanning.
 --
 -- See the `noseyparker::match_type::Match` type in noseyparker for correspondence.
 (
     -- An arbitrary integer identifier for the match
-    id integer primary key,
+    id INTEGER PRIMARY KEY,
 
     -- The content-based unique identifier of the match
     -- sha1_hex(rule structural identifier + '\0' + hex blob id + '\0' + decimal start byte + '\0' + decimal end byte)
-    structural_id text unique not null,
+    structural_id TEXT UNIQUE NOT NULL,
 
     -- The identifier of the finding this match belongs to
-    finding_id integer not null references finding(id),
+    finding_id INTEGER NOT NULL REFERENCES finding(id),
 
     -- The blob in which this match occurs
-    blob_id integer not null references blob(id),
+    blob_id INTEGER NOT NULL REFERENCES blob(id),
 
     -- The byte offset within the blob for the start of the match
-    start_byte integer not null,
+    start_byte INTEGER NOT NULL,
 
     -- The byte offset within the blob for the end of the match
-    end_byte integer not null,
+    end_byte INTEGER NOT NULL,
 
     -- the contextual snippet preceding the matching input
-    before_snippet_id integer not null references snippet(id),
+    before_snippet_id INTEGER NOT NULL REFERENCES snippet(id),
 
     -- the entire matching input
-    matching_snippet_id integer not null references snippet(id),
+    matching_snippet_id INTEGER NOT NULL REFERENCES snippet(id),
 
     -- the contextual snippet trailing the matching input
-    after_snippet_id integer not null references snippet(id),
+    after_snippet_id INTEGER NOT NULL REFERENCES snippet(id),
 
-    unique (
+    UNIQUE (
         blob_id,
         start_byte,
         end_byte,
         finding_id
     ),
 
-    foreign key (blob_id, start_byte, end_byte) references blob_source_span(blob_id, start_byte, end_byte)
+    FOREIGN KEY (blob_id, start_byte, end_byte) REFERENCES blob_source_span(blob_id, start_byte, end_byte)
 ) STRICT;
 
-CREATE INDEX match_finding_id_index on match(finding_id);
+CREATE INDEX IF NOT EXISTS match_finding_id_index ON match(finding_id);
 
 --------------------------------------------------------------------------------
 -- Statuses
 --------------------------------------------------------------------------------
-CREATE TABLE match_status
+CREATE TABLE IF NOT EXISTS match_status
 -- This table records the accepted/rejected status of matches.
 (
     -- The integer identifier of the match
-    match_id integer primary key references match(id),
+    match_id INTEGER PRIMARY KEY REFERENCES match(id),
 
     -- The assigned status, either `accept` or `reject`
-    status text not null,
+    status TEXT NOT NULL,
 
-    constraint status_valid check (status in ('accept', 'reject'))
+    CONSTRAINT status_valid CHECK (status IN ('accept', 'reject'))
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- Comments
 --------------------------------------------------------------------------------
-CREATE TABLE finding_comment
+CREATE TABLE IF NOT EXISTS finding_comment
 -- This table records ad-hoc comments assigned to findings.
 (
     -- The integer identifier of the finding
-    finding_id integer primary key references finding(id),
+    finding_id INTEGER PRIMARY KEY REFERENCES finding(id),
 
     -- The assigned comment, a non-empty string
-    comment text not null,
+    comment TEXT NOT NULL,
 
-    constraint comment_valid check (comment != '')
+    CONSTRAINT comment_valid CHECK (comment != '')
 ) STRICT;
 
-CREATE TABLE match_comment
+CREATE TABLE IF NOT EXISTS match_comment
 -- This table records ad-hoc comments assigned to matches.
 (
     -- The integer identifier of the match
-    match_id integer primary key references match(id),
+    match_id INTEGER PRIMARY KEY REFERENCES match(id),
 
     -- The assigned comment, a non-empty string
-    comment text not null,
+    comment TEXT NOT NULL,
 
-    constraint comment_valid check (comment != '')
+    CONSTRAINT comment_valid CHECK (comment != '')
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- Scores
 --------------------------------------------------------------------------------
-CREATE TABLE match_score
+CREATE TABLE IF NOT EXISTS match_score
 -- This table records a numeric score for matches.
 (
     -- The integer identifier of the match
-    match_id integer primary key references match(id),
+    match_id INTEGER PRIMARY KEY REFERENCES match(id),
 
     -- The numeric score in [0, 1]
-    score real not null,
+    score REAL NOT NULL,
 
-    constraint score_valid check (0.0 <= score and score <= 1.0)
+    CONSTRAINT score_valid CHECK (0.0 <= score AND score <= 1.0)
 ) STRICT;
 
 --------------------------------------------------------------------------------
 -- Convenience Views
 --------------------------------------------------------------------------------
-CREATE VIEW match_denorm
--- A convenience view for matches in denormalized form rather than the
--- low-level datastore form that involves numerous indirections.
-(
-    id,
-    structural_id,
-    finding_id,
-
-    blob_id,
-
-    start_byte,
-    end_byte,
-
-    start_line,
-    start_column,
-    end_line,
-    end_column,
-
-    rule_name,
-    rule_text_id,
-    rule_structural_id,
-
-    groups,
-
-    before_snippet,
-    matching_snippet,
-    after_snippet,
-
-    status,
-    comment,
-    score
-) as
-select
+CREATE VIEW IF NOT EXISTS match_denorm AS
+SELECT
     m.id,
     m.structural_id,
     f.finding_id,
@@ -323,114 +292,69 @@ select
     match_status.status,
     match_comment.comment,
     match_score.score
-from
+FROM
     match m
-    inner join finding f on (m.finding_id = f.id)
-    inner join blob_source_span bss on (m.blob_id = bss.blob_id and m.start_byte = bss.start_byte and m.end_byte = bss.end_byte)
-    inner join blob b on (m.blob_id = b.id)
-    inner join rule r on (f.rule_id = r.id)
-    inner join snippet before_snippet on (m.before_snippet_id = before_snippet.id)
-    inner join snippet matching_snippet on (m.matching_snippet_id = matching_snippet.id)
-    inner join snippet after_snippet on (m.after_snippet_id = after_snippet.id)
-    left outer join match_status on (m.id = match_status.match_id)
-    left outer join match_comment on (m.id = match_comment.match_id)
-    left outer join match_score on (m.id = match_score.match_id)
-;
+    INNER JOIN finding f ON (m.finding_id = f.id)
+    INNER JOIN blob_source_span bss ON (m.blob_id = bss.blob_id AND m.start_byte = bss.start_byte AND m.end_byte = bss.end_byte)
+    INNER JOIN blob b ON (m.blob_id = b.id)
+    INNER JOIN rule r ON (f.rule_id = r.id)
+    INNER JOIN snippet before_snippet ON (m.before_snippet_id = before_snippet.id)
+    INNER JOIN snippet matching_snippet ON (m.matching_snippet_id = matching_snippet.id)
+    INNER JOIN snippet after_snippet ON (m.after_snippet_id = after_snippet.id)
+    LEFT OUTER JOIN match_status ON (m.id = match_status.match_id)
+    LEFT OUTER JOIN match_comment ON (m.id = match_comment.match_id)
+    LEFT OUTER JOIN match_score ON (m.id = match_score.match_id);
 
-CREATE VIEW blob_denorm
--- A convenience view for blobs in denormalized form rather than the low-level
--- datastore form that involves numerous indirection.
-(
-    id,
-    blob_id,
-    size,
-    mime_essence,
-    charset
-)
-as
-select
+CREATE VIEW IF NOT EXISTS blob_denorm AS
+SELECT
     b.id,
     b.blob_id,
     b.size,
     bm.mime_essence,
     bc.charset
-from
+FROM
     blob b
-    left outer join blob_mime_essence bm on (b.id = bm.blob_id)
-    left outer join blob_charset bc on (b.id = bc.blob_id)
-;
+    LEFT OUTER JOIN blob_mime_essence bm ON (b.id = bm.blob_id)
+    LEFT OUTER JOIN blob_charset bc ON (b.id = bc.blob_id);
 
-CREATE VIEW blob_provenance_denorm
--- A convenience view for blob provenance in denormalized form rather than the
--- low-level datastore form that involves numerous indirection.
-(
-    blob_id,
-    provenance
-)
-as
-select
+CREATE VIEW IF NOT EXISTS blob_provenance_denorm AS
+SELECT
     b.blob_id,
     bp.provenance
-from
+FROM
     blob b
-    inner join blob_provenance bp on (b.id = bp.blob_id)
-;
+    INNER JOIN blob_provenance bp ON (b.id = bp.blob_id);
 
-CREATE VIEW finding_denorm
--- A convenience view for findings in their fully denormalized form rather
--- than the low-level datastore form that involves numerous indirection.
-(
-    finding_id,
-    rule_name,
-    rule_text_id,
-    rule_structural_id,
-    rule_syntax,
-    groups,
-    num_matches,
-    mean_score,
-    comment,
-    match_statuses
-)
-as
-select
+CREATE VIEW IF NOT EXISTS finding_denorm AS
+SELECT
     f.finding_id,
     r.name,
     r.text_id,
     r.structural_id,
     r.syntax,
     f.groups,
-    count(*),
-    avg(ms.score),
+    COUNT(*),
+    AVG(ms.score),
     fc.comment,
-    json_group_array(distinct match_status.status)
-        filter (where match_status.status is not null) match_statuses
-from
+    json_group_array(DISTINCT match_status.status)
+        FILTER (WHERE match_status.status IS NOT NULL) AS match_statuses
+FROM
     finding f
-    inner join match m on (m.finding_id = f.id)
-    inner join rule r on (f.rule_id = r.id)
-    left outer join match_score ms on (m.id = ms.match_id)
-    left outer join match_status on (m.id = match_status.match_id)
-    left outer join finding_comment fc on (f.id = fc.finding_id)
-group by f.id
-;
+    INNER JOIN match m ON (m.finding_id = f.id)
+    INNER JOIN rule r ON (f.rule_id = r.id)
+    LEFT OUTER JOIN match_score ms ON (m.id = ms.match_id)
+    LEFT OUTER JOIN match_status ON (m.id = match_status.match_id)
+    LEFT OUTER JOIN finding_comment fc ON (f.id = fc.finding_id)
+GROUP BY f.id;
 
-CREATE VIEW finding_summary
--- A convenience view for a summary of findings in denormalized form.
-(
-    rule_name,
-    rule_structural_id,
-    total_findings,
-    total_matches
-)
-as
-select
-    r.name rule_name,
-    r.structural_id rule_structural_id,
-    count(distinct f.finding_id) total_findings,
-    count(*) total_matches
-from
+CREATE VIEW IF NOT EXISTS finding_summary AS
+SELECT
+    r.name AS rule_name,
+    r.structural_id AS rule_structural_id,
+    COUNT(DISTINCT f.finding_id) AS total_findings,
+    COUNT(*) AS total_matches
+FROM
     finding f
-    inner join match m on (m.finding_id = f.id)
-    inner join rule r on (f.rule_id = r.id)
-group by rule_name, rule_structural_id
-;
+    INNER JOIN match m ON (m.finding_id = f.id)
+    INNER JOIN rule r ON (f.rule_id = r.id)
+GROUP BY rule_name, rule_structural_id;
