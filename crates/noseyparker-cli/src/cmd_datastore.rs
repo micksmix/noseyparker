@@ -13,14 +13,16 @@ pub fn run(global_args: &GlobalArgs, args: &DatastoreArgs) -> Result<()> {
 }
 
 fn cmd_datastore_init(global_args: &GlobalArgs, args: &DatastoreInitArgs) -> Result<()> {
-    let datastore = Datastore::create(&args.datastore, global_args.advanced.sqlite_cache_size)?;
+    // let datastore = Datastore::create(&args.datastore, global_args.advanced.sqlite_cache_size)?;
+    let datastore = Datastore::create_or_open(global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open in-memory datastore"))?;
     info!("Initialized new datastore at {}", &datastore.root_dir().display());
     Ok(())
 }
 
 fn cmd_datastore_export(global_args: &GlobalArgs, args: &DatastoreExportArgs) -> Result<()> {
-    let datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
+    let mut datastore = Datastore::create_or_open(global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open in-memory datastore"))?;
     let output_path = &args.output;
 
     // XXX Move this code into datastore.rs?

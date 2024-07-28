@@ -21,7 +21,6 @@ mod cmd_summarize;
 mod reportable;
 mod rule_loader;
 mod util;
-mod global;
 
 use args::{CommandLineArgs, GlobalArgs};
 
@@ -120,9 +119,8 @@ fn try_main(args: &CommandLineArgs) -> Result<()> {
         args::Command::Rules(args) => cmd_rules::run(global_args, args),
         args::Command::Scan(args) => {
             cmd_scan::run(global_args, args)?;
-
+    
             let report_args = args::ReportArgs {
-                datastore: PathBuf::from(":memory:"),
                 filter_args: args::ReportFilterArgs {
                     max_matches: 3,
                     min_score: 0.05,
@@ -133,7 +131,7 @@ fn try_main(args: &CommandLineArgs) -> Result<()> {
                     format: args::ReportOutputFormat::Human,
                 },
             };
-
+    
             cmd_report::run(global_args, &report_args)
         }
         args::Command::Summarize(args) => cmd_summarize::run(global_args, args),

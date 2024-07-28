@@ -47,8 +47,8 @@ impl FindingSummaryReporter {
 }
 
 pub fn run(global_args: &GlobalArgs, args: &SummarizeArgs) -> Result<()> {
-    let datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
+    let mut datastore = Datastore::create_or_open(global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open in-memory datastore"))?;
     let output = args
         .output_args
         .get_writer()

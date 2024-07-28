@@ -17,8 +17,9 @@ pub fn run(global_args: &GlobalArgs, args: &AnnotationsArgs) -> Result<()> {
 }
 
 fn cmd_annotations_import(global_args: &GlobalArgs, args: &AnnotationsImportArgs) -> Result<()> {
-    let mut datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
+    let mut datastore = Datastore::create_or_open(global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open in-memory datastore"))?;
+
 
     let input = get_reader_for_file_or_stdin(args.input.as_ref())?;
 
@@ -35,9 +36,9 @@ fn cmd_annotations_import(global_args: &GlobalArgs, args: &AnnotationsImportArgs
 }
 
 fn cmd_annotations_export(global_args: &GlobalArgs, args: &AnnotationsExportArgs) -> Result<()> {
-    let datastore = Datastore::open(&args.datastore, global_args.advanced.sqlite_cache_size)
-        .with_context(|| format!("Failed to open datastore at {}", args.datastore.display()))?;
-
+    let mut datastore = Datastore::create_or_open(global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open in-memory datastore"))?;
+    
     let output = get_writer_for_file_or_stdout(args.output.as_ref())
         .context("Failed to open output for writing")?;
 

@@ -15,6 +15,7 @@ pub mod matcher;
 pub mod matcher_stats;
 pub mod provenance;
 pub mod provenance_set;
+pub mod global;
 #[cfg(feature = "rule_profiling")]
 pub mod rule_profiling;
 pub mod rules_database;

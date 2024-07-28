@@ -951,15 +951,15 @@ pub struct SummarizeArgs {
 #[derive(Args, Debug)]
 pub struct ReportArgs {
     /// Use the specified datastore
-    #[arg(
-        long,
-        short,
-        value_name = "PATH",
-        value_hint = ValueHint::DirPath,
-        env("NP_DATASTORE"),
-        default_value=DEFAULT_DATASTORE,
-    )]
-    pub datastore: PathBuf,
+    // #[arg(
+    //     long,
+    //     short,
+    //     value_name = "PATH",
+    //     value_hint = ValueHint::DirPath,
+    //     env("NP_DATASTORE"),
+    //     default_value=DEFAULT_DATASTORE,
+    // )]
+    // pub datastore: PathBuf,
 
     #[command(flatten)]
     pub filter_args: ReportFilterArgs,

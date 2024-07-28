@@ -17,7 +17,6 @@ use noseyparker::blob::{Blob, BlobId};
 use noseyparker::blob_id_map::BlobIdMap;
 use noseyparker::blob_metadata::BlobMetadata;
 use noseyparker::datastore::Datastore;
-use noseyparker::defaults::DEFAULT_IGNORE_RULES;
 use noseyparker::git_binary::{CloneMode, Git};
 use noseyparker::git_url::GitUrl;
 use noseyparker::github;
@@ -28,7 +27,6 @@ use noseyparker::matcher_stats::MatcherStats;
 use noseyparker::provenance::Provenance;
 use noseyparker::provenance_set::ProvenanceSet;
 use noseyparker::rules_database::RulesDatabase;
-use crate::global::DATASTORE_PATH; 
 
 type DatastoreMessage = (ProvenanceSet, BlobMetadata, Vec<(Option<f64>, Match)>);
 
@@ -60,12 +58,11 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
     // Open datastore
     // ---------------------------------------------------------------------------------------------
     init_progress.set_message("Initializing datastore...");
-    let datastore_path = DATASTORE_PATH.lock().unwrap().clone();
-    let mut datastore = Datastore::create_or_open(Path::new(&datastore_path), global_args.advanced.sqlite_cache_size)
-        .with_context(|| {
-            format!("Failed to open datastore at {}", datastore_path)
-        })?;
+    // let datastore_path = DATASTORE_PATH.lock().unwrap().clone();
+    let mut datastore = Datastore::create_or_open(global_args.advanced.sqlite_cache_size)
+        .with_context(|| format!("Failed to open in-memory datastore"))?;
 
+    
 
     // ---------------------------------------------------------------------------------------------
     // Load rules
@@ -244,38 +241,38 @@ pub fn run(global_args: &args::GlobalArgs, args: &args::ScanArgs) -> Result<()> 
                 ie.enumerate_git_history(false);
             }
 
-            // Load default ignore file. Note that we have to write it to a file first,
-            // because the API for the `ignore` crate doesn't expose something that takes a
-            // string.
-            let ignore_path = datastore.scratch_dir().join("default_ignore_rules.conf");
-            std::fs::write(&ignore_path, DEFAULT_IGNORE_RULES).with_context(|| {
-                format!("Failed to write default ignore rules to {}", ignore_path.display())
-            })?;
+            // // Load default ignore file. Note that we have to write it to a file first,
+            // // because the API for the `ignore` crate doesn't expose something that takes a
+            // // string.
+            // let ignore_path = datastore.scratch_dir().join("default_ignore_rules.conf");
+            // std::fs::write(&ignore_path, DEFAULT_IGNORE_RULES).with_context(|| {
+            //     format!("Failed to write default ignore rules to {}", ignore_path.display())
+            // })?;
 
-            ie.add_ignore(&ignore_path).with_context(|| {
-                format!("Failed to load ignore rules from {}", ignore_path.display())
-            })?;
+            // ie.add_ignore(&ignore_path).with_context(|| {
+            //     format!("Failed to load ignore rules from {}", ignore_path.display())
+            // })?;
 
-            // Load any specified ignore files
-            for ignore_path in args.content_filtering_args.ignore.iter() {
-                debug!("Using ignore rules from {}", ignore_path.display());
-                ie.add_ignore(ignore_path).with_context(|| {
-                    format!("Failed to load ignore rules from {}", ignore_path.display())
-                })?;
-            }
+            // // Load any specified ignore files
+            // for ignore_path in args.content_filtering_args.ignore.iter() {
+            //     debug!("Using ignore rules from {}", ignore_path.display());
+            //     ie.add_ignore(ignore_path).with_context(|| {
+            //         format!("Failed to load ignore rules from {}", ignore_path.display())
+            //     })?;
+            // }
 
-            // Make sure the datastore itself is not scanned
-            let datastore_path = std::fs::canonicalize(datastore.root_dir())?;
-            ie.filter_entry(move |entry| {
-                let path = match std::fs::canonicalize(entry.path()) {
-                    Err(e) => {
-                        warn!("Failed to canonicalize path {}: {}", entry.path().display(), e);
-                        return true;
-                    }
-                    Ok(p) => p,
-                };
-                path != datastore_path
-            });
+            // // Make sure the datastore itself is not scanned
+            // let datastore_path = std::fs::canonicalize(datastore.root_dir())?;
+            // ie.filter_entry(move |entry| {
+            //     let path = match std::fs::canonicalize(entry.path()) {
+            //         Err(e) => {
+            //             warn!("Failed to canonicalize path {}: {}", entry.path().display(), e);
+            //             return true;
+            //         }
+            //         Ok(p) => p,
+            //     };
+            //     path != datastore_path
+            // });
 
             // Determine whether to collect git metadata or not
             let collect_git_metadata = match args.metadata_args.git_blob_provenance {
